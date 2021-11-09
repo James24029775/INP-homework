@@ -29,29 +29,38 @@ void    err_sys(const char* x);
 /*Myself*/
 void    Initialization();
 void    sendMessage(char* buf, char* msg, int sockfd);
-void    DecideService(char *readBuf, int n, char **username, char **pwd, char **msg, int *type, int *cnt);
-void    DoService(int type, int cnt, char *username, char *pwd, char *msg, int clientIdx, char *tmp);
-void    popMsg(int userindex, int msgindex, char *tmp);
+void    DecideService(char *readBuf, int n, char **username, char **pwd, char **msg, char **bname, char **comment, int *type, int *cnt, int *qpost);
+void    DoService(int type, int cnt, char *username, char *pwd, char *msg, char *bname, int clientIdx, char *tmp);
+void    popMsg(int idx, int msgindex, char *tmp);
 void    storeUsername(char *username, char *pwd);
+void    storeBoardInfo(char *bname, char *username);
+void    showBoardList(char *tmp);
 void    showUserList(char *tmp);
 void    showMsgBox(char *tmp, int index);
 void    Welcome(int sockfd);
 void    showPrompt(int sockfd);
+bool    MessageBox(int sockfd, int clientIdx);
 bool    isMsgLeft(int index);
 bool    checkForm(int type, int cnt);
 int     checkUserIfExist(char *username);
-bool    MessageBox(int sockfd, int clientIdx);
+int     checkBnameIfExist(char *bname);
 
+/*HW1 variables*/
 char    accountName[K][K];
 char    accountPwd[K][K];
 char    msgBox[K][K][K][KK];
 bool    loginOrNot[K];
-bool    CUseOrNot[MaxConnection];
 int     msgWrite[K][K];
 int     msgRead[K][K];
-int     accountNum = 0;
-int     userIndexForReg[MaxConnection], userIndexForMsg[MaxConnection], userIndexForRec[MaxConnection];
+int     acnt = 0;
+
+/*HW2 variables*/
+char    boardName[K][KK];
+char    boardAuthor[K][KK];
+char    boardContent[K][KK];
+bool    CUseOrNot[MaxConnection];
 int     userIndex[MaxConnection];
+int     bcnt = 0;
 
 
 typedef struct msgIndex{
@@ -94,6 +103,9 @@ int main(int argc, char *argv[]){
 
     /* Initialize global variables account*/
     Initialization();
+    for (int z = 0 ; z < MaxConnection ; z++) cout << userIndex[z] << ' ';
+    cout << userIndex << endl;
+    cout << endl;
 
     /* Initialize select's variables*/
     maxi = -1;
@@ -147,19 +159,12 @@ int main(int argc, char *argv[]){
 
                 if (!CUseOrNot[i])                      /*Mean connection failed or client type "exit"*/
                 {
-                    userIndexForReg[i] = -1;
-                    userIndexForMsg[i] = -1;
-                    userIndexForRec[i] = -1;
                     userIndex[i]       = -1;
                     close(sockfd);
                     FD_CLR(sockfd, &allset);
                     client[i] = -1;
                 }
                 else showPrompt(sockfd);                /*Deal with "%"*/
-
-                for (int j = 0 ; j < MaxConnection ; j++)
-                    cout << userIndex[j] << ' ';
-                cout << endl;
 
 				if (--nready <= 0)
 					break;				/* no more readable descriptors */
@@ -174,27 +179,34 @@ int main(int argc, char *argv[]){
 bool MessageBox(int sockfd, int clientIdx){
     ssize_t n;
     char readBuf[MAXLINE], writeBuf[MAXLINE], tmp[K];
-    char *username, *pwd, *msg;
-    int type=-1, cnt=0;
+    char *username, *pwd, *msg, *bname, *comment;
+    int type=-1, cnt=0, qpost=-1;
     bool isTrueForm=true;
 
 again:
     /*Reset*/
     cnt = 0;
     type = -1;
+    qpost = -1;
     memset(tmp, '\0', K);
+    comment = (char*)"";
     pwd = (char*)"";
     username = (char*)"";
+    bname = (char*)"";
     msg = (char*)"";
     
     bzero(&readBuf, MAXLINE);
-    if ((n = read(sockfd, readBuf, MAXLINE)) < 0) return -1;                /*Check for disconnection*/
+    /*Check for disconnection*/
+    if ((n = read(sockfd, readBuf, MAXLINE)) < 0) return -1;                                
 
     else
     {
-        DecideService(readBuf, n, &username, &pwd, &msg, &type, &cnt);      /*Update username, pwd, msg, type, cnt*/
+        /*Update username, pwd, msg, bname, type, cnt*/
+        DecideService(readBuf, n, &username, &pwd, &msg, &bname, &comment, &type, &cnt, &qpost);
 
-        DoService(type, cnt, username, pwd, msg, clientIdx, tmp);           /*Update userIndex, tmp*/
+        /*Update userIndex[] base on clientIdx, tmp*/
+        DoService(type, cnt, username, pwd, msg, bname, clientIdx, tmp);
+        cout << type << " " << endl;
         
         sendMessage(writeBuf, tmp, sockfd);                     
 
@@ -220,12 +232,12 @@ void showPrompt(int sockfd)
     sendMessage(writeBuf, PROMPT, sockfd);                                 /*Deal with %*/
 }
 
-void popMsg(int userindex, int msgindex, char *tmp)
+void popMsg(int idx, int msgindex, char *tmp)
 {
-    strcpy(tmp, msgBox[userindex][msgindex][msgRead[userindex][msgindex]]);
+    strcpy(tmp, msgBox[idx][msgindex][msgRead[idx][msgindex]]);
     strcat(tmp, "\n");
-    msgRead[userindex][msgindex]++;
-    if (msgRead[userindex][msgindex] == K) msgRead[userindex][msgindex] = 0;
+    msgRead[idx][msgindex]++;
+    if (msgRead[idx][msgindex] == K) msgRead[idx][msgindex] = 0;
 }
 
 bool isMsgLeft(int index)
@@ -245,6 +257,9 @@ void Initialization()
     {
         memset(accountName[i], '\0', K);
         memset(accountPwd[i], '\0', K);
+        memset(boardName[i], '\0', KK);
+        memset(boardAuthor[i], '\0', KK);
+        memset(boardContent[i], '\0', K);
         memset(msgWrite[i], 0, K);
         memset(msgRead[i], 0, K);
         for ( ; j < K ; j++)
@@ -253,13 +268,10 @@ void Initialization()
     }
     for ( i = 0 ; i < MaxConnection ; i++)
     {
-        userIndexForReg[i] = -1;
-        userIndexForMsg[i] = -1;
-        userIndexForRec[i] = -1;
         userIndex[i]       = -1;
     }
     memset(loginOrNot, false, K);
-    memset(CUseOrNot, false, K);
+    memset(CUseOrNot, false, MaxConnection);
 }
 
 int cmpfunc (const void * a, const void * b)
@@ -267,63 +279,87 @@ int cmpfunc (const void * a, const void * b)
    return strcmp((*(msgIndex*)a).name, (*(msgIndex*)b).name);
 }
 
-void showMsgBox(char *ans, int index)
+void showMsgBox(char *tmp, int index)
 {
-    msgIndex msgindex[accountNum];
+    msgIndex msgindex[acnt];
     int i = 0, target = 0, msgLeft = 0;
-    char tmp[K];
+    char i2a[K];
 
-    for(i = 0 ; i < accountNum ; i++)
+    for(i = 0 ; i < acnt ; i++)
     {
         msgindex[i].index = i;
         strcpy(msgindex[i].name, accountName[i]);
     }
-    qsort(msgindex, accountNum, sizeof(msgIndex), cmpfunc);
+    qsort(msgindex, acnt, sizeof(msgIndex), cmpfunc);
 
-    for (i = 0 ; i < accountNum ; i++)
+    for (i = 0 ; i < acnt ; i++)
     {
         target = msgindex[i].index;
         msgLeft = abs(msgWrite[index][target] - msgRead[index][target]);
         if (msgLeft)
         {
-            sprintf(tmp, "%d", msgLeft);
-            strcat(ans, tmp);
-            strcat(ans, " message from ");
-            strcat(ans, accountName[target]);
-            strcat(ans, ".\n");
+            sprintf(i2a, "%d", msgLeft);
+            strcat(tmp, i2a);
+            strcat(tmp, " message from ");
+            strcat(tmp, accountName[target]);
+            strcat(tmp, ".\n");
         }
     }
 }
 
-void showUserList(char *ans)
+
+void showBoardList(char *tmp)
 {
-    msgIndex msgindex[accountNum];
+    char i2a[K];
+    strcat(tmp, "Index Name Moderator\n");
+    for (int i = 0 ; i < bcnt ; i++)
+    {
+        sprintf(i2a, "%d", i+1);
+        strcat(tmp, i2a);
+        strcat(tmp, " ");
+        strcat(tmp, boardName[i]);
+        strcat(tmp, " ");
+        strcat(tmp, boardAuthor[i]);
+        strcat(tmp, "\n");
+    }
+}
+
+void showUserList(char *tmp)
+{
+    msgIndex msgindex[acnt];
     int i = 0;
-    for(i = 0 ; i < accountNum ; i++)
+    for(i = 0 ; i < acnt ; i++)
     {
         msgindex[i].index = i;
         strcpy(msgindex[i].name, accountName[i]);
     }
-    qsort(msgindex, accountNum, sizeof(msgIndex), cmpfunc);
+    qsort(msgindex, acnt, sizeof(msgIndex), cmpfunc);
 
-    for (i = 0 ; i < accountNum ; i++)
+    for (i = 0 ; i < acnt ; i++)
     {
-        strcat(ans, accountName[msgindex[i].index]);
-        strcat(ans, "\n");
+        strcat(tmp, accountName[msgindex[i].index]);
+        strcat(tmp, "\n");
     }
+}
+
+void storeBoardInfo(char *bname, char *username)
+{
+    strcpy(boardName[bcnt], bname);
+    strcpy(boardAuthor[bcnt], username);
+    bcnt++;
 }
 
 void storeUsername(char *username, char *pwd)
 {
-    strcpy(accountName[accountNum], username);
-    strcpy(accountPwd[accountNum], pwd);
-    accountNum++;
+    strcpy(accountName[acnt], username);
+    strcpy(accountPwd[acnt], pwd);
+    acnt++;
 }
 
 int checkUserIfExist(char *username)
 {
     int i = 0;
-    for(; i < accountNum; i++)
+    for(; i < acnt; i++)
     {
         if (strcmp(accountName[i], username) == 0) return i;
     }
@@ -336,7 +372,8 @@ There is no passing by reference in C code, but C++ has.
 2. Username and pwd are pointer variables, and we want to update them to "address of target string" without return, 
     so need to pass the address of pointer variables to the function, so does msg.
 */
-void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg, int *type, int *cnt)
+void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg, char **bname, char **comment,
+                    int *type, int *cnt, int *qpost)
 {
     char msg_t[MAXLINE], *order;
     readBuf[n-1] = '\0';
@@ -345,15 +382,26 @@ void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg
     
     while (order != NULL)
     {
-        if      (strcmp(order, "register")   == 0)    *type = 0;
-        else if (strcmp(order, "login")      == 0)    *type = 1;
-        else if (strcmp(order, "logout")     == 0)    *type = 2;
-        else if (strcmp(order, "whoami")     == 0)    *type = 3;
-        else if (strcmp(order, "list-user")  == 0)    *type = 4;
-        else if (strcmp(order, "exit")       == 0)    *type = 5;
-        else if (strcmp(order, "send")       == 0)    *type = 6;
-        else if (strcmp(order, "list-msg")   == 0)    *type = 7;
-        else if (strcmp(order, "receive")    == 0)    *type = 8;
+        /*HW1 operation*/
+        if      (strcmp(order, "register")       == 0)    *type = 0;
+        else if (strcmp(order, "login")          == 0)    *type = 1;
+        else if (strcmp(order, "logout")         == 0)    *type = 2;
+        else if (strcmp(order, "whoami")         == 0)    *type = 3;
+        else if (strcmp(order, "list-user")      == 0)    *type = 4;
+        else if (strcmp(order, "exit")           == 0)    *type = 5;
+        else if (strcmp(order, "send")           == 0)    *type = 6;
+        else if (strcmp(order, "list-msg")       == 0)    *type = 7;
+        else if (strcmp(order, "receive")        == 0)    *type = 8;
+        /*HW2 operation*/
+        else if (strcmp(order, "create-board")   == 0)    *type = 9;
+        else if (strcmp(order, "create-post")    == 0)    *type = 10;
+        else if (strcmp(order, "list-board")     == 0)    *type = 11;
+        else if (strcmp(order, "list-post")      == 0)    *type = 12;
+        else if (strcmp(order, "read")           == 0)    *type = 13;
+        else if (strcmp(order, "delete-post")    == 0)    *type = 14;
+        else if (strcmp(order, "update-post")    == 0)    *type = 15;
+        else if (strcmp(order, "comment")        == 0)    *type = 16;
+
 
         if (*type == 0 && *cnt == 1) *username = order;
         else if (*type == 0 && *cnt == 2) *pwd = order;
@@ -373,16 +421,37 @@ void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg
 
         if (*type == 8 && *cnt == 1) *username = order;
 
+        if (*type == 9 && *cnt == 1) *bname    = order;
+
+        /*條件複雜，之後在處理***********************************************************************************/
+        if (*type == 10 && *cnt == 1) *bname   = order;
+        // else if (*type == 10 && )
+
+        if (*type == 12 && *cnt == 1) *bname   = order;
+
+        if (*type == 13 && *cnt == 1) *qpost   = atoi(order);
+
+        if (*type == 14 && *cnt == 1) *qpost   = atoi(order);
+
+        /*條件複雜，之後在處理***********************************************************************************/
+        if (*type == 15 && *cnt == 1) *qpost   = atoi(order);
+        // else if ()
+
+        if (*type == 16 && *cnt == 1) *qpost   = atoi(order);
+        else if (*type == 16 && *cnt == 2) *comment = order;
+
+
         order = strtok(NULL, " ");
         *cnt += 1;
     }
 }
 
-void DoService(int type, int cnt, char *username, char *pwd, char *msg, int clientIdx, char *tmp)
+void DoService(int type, int cnt, char *username, char *pwd, char *msg, char *bname, int clientIdx, char *tmp)
 {
-    int RegForClient = userIndexForReg[clientIdx];
-    int MsgForClient = userIndexForMsg[clientIdx];
-    int RecForClient = userIndexForRec[clientIdx];
+    int RegForClient;
+    int MsgForClient;
+    int RecForClient;
+    int CBForClient;
 
     int isTrueForm = checkForm(type, cnt);
     if (isTrueForm){
@@ -459,6 +528,7 @@ void DoService(int type, int cnt, char *username, char *pwd, char *msg, int clie
             // Tackle Exit
             case 5:
                 if (loginOrNot[userIndex[clientIdx]]){
+                    loginOrNot[userIndex[clientIdx]] = false;
                     strcat(tmp, "Bye, ");
                     strcat(tmp, accountName[userIndex[clientIdx]]);
                     strcat(tmp, ".\n");
@@ -510,6 +580,29 @@ void DoService(int type, int cnt, char *username, char *pwd, char *msg, int clie
                 }
                 break;
 
+            // Tackle create-board
+            case 9:
+                if (loginOrNot[userIndex[clientIdx]] == false){
+                    strcpy(tmp, "Please login first.\n");
+                }
+                else if ((CBForClient = checkBnameIfExist(bname)) == -1){
+                    storeBoardInfo(bname, accountName[userIndex[clientIdx]]);
+                    strcpy(tmp, "Create board successfully.\n");
+                }
+                else{
+                    strcpy(tmp, "Board already exists.\n");
+                }
+                break;
+
+            // Tackle create-post
+            case 10:
+                break;
+
+            // Tackle list-board
+            case 11:
+                showBoardList(tmp);
+                break;
+
             default:
                 strcpy(tmp, "Invalid service!\n");
                 break;
@@ -529,6 +622,27 @@ void DoService(int type, int cnt, char *username, char *pwd, char *msg, int clie
             case 8:
                 strcpy(tmp, "Usage: receive <username>\n");
                 break;
+            case 9:
+                strcpy(tmp, "Usage: create-board <name>\n");
+                break;
+            case 10:
+                strcpy(tmp, "Usage: create-post <board-name> --title <title> --content <content>\n");
+                break;
+            case 12:
+                strcpy(tmp, "Usage: list-post <board-name>\n");
+                break;
+            case 13:
+                strcpy(tmp, "Usage: read <post-S/N>\n");
+                break;
+            case 14:
+                strcpy(tmp, "Usage: delete-post <post-S/N>\n");
+                break;
+            case 15:
+                strcpy(tmp, "Usage: update-post <post-S/N> --title/content <new>\n");
+                break;
+            case 16:
+                strcpy(tmp, "Usage: comment <post-S/N> <comment>\n");
+                break;
 
         }
     }
@@ -546,7 +660,26 @@ bool checkForm(int type, int cnt){
     if (type == 1 && cnt != 3) return false;
     if (type == 6 && cnt <= 2) return false;
     if (type == 8 && cnt != 2) return false;
+    if (type == 9 && cnt != 2) return false;
+    // 條件複雜，之後處理********************************************************************************************************
+    // if (type == 10 && cnt != 1) return false;
+    if (type == 12 && cnt != 2) return false;
+    if (type == 13 && cnt != 2) return false;
+    if (type == 14 && cnt != 2) return false;
+    // 條件複雜，之後處理********************************************************************************************************
+    // if (type == 15 && cnt != 1) return false;
+    if (type == 16 && cnt != 3) return false;
     return true;
+}
+
+int checkBnameIfExist(char *bname)
+{
+    int i = 0;
+    for(; i < bcnt; i++)
+    {
+        if (strcmp(boardName[i], bname) == 0) return i;
+    }
+    return -1;
 }
 
 void err_sys(const char* x) 
