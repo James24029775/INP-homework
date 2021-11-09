@@ -10,6 +10,8 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <iostream>
+#include <algorithm>
+#include <vector>
 using namespace std;
 
 # define SERV_PORT 8000
@@ -29,7 +31,7 @@ void    err_sys(const char* x);
 /*Myself*/
 void    Initialization();
 void    sendMessage(char* buf, char* msg, int sockfd);
-void    DecideService(char *readBuf, int n, char **username, char **pwd, char **msg, char **bname, char **comment, int *type, int *cnt, int *qpost);
+void    DecideService(char *readBuf, int n, char **username, char **pwd, char **msg, char **bname, char **comment, int *type, int *cnt, int *qpost, string *title, string *content);
 void    DoService(int type, int cnt, char *username, char *pwd, char *msg, char *bname, int clientIdx, char *tmp);
 void    popMsg(int idx, int msgindex, char *tmp);
 void    storeUsername(char *username, char *pwd);
@@ -182,6 +184,7 @@ bool MessageBox(int sockfd, int clientIdx){
     char *username, *pwd, *msg, *bname, *comment;
     int type=-1, cnt=0, qpost=-1;
     bool isTrueForm=true;
+    string title, content;
 
 again:
     /*Reset*/
@@ -194,6 +197,8 @@ again:
     username = (char*)"";
     bname = (char*)"";
     msg = (char*)"";
+    title = "";
+    content = "";
     
     bzero(&readBuf, MAXLINE);
     /*Check for disconnection*/
@@ -202,11 +207,10 @@ again:
     else
     {
         /*Update username, pwd, msg, bname, type, cnt*/
-        DecideService(readBuf, n, &username, &pwd, &msg, &bname, &comment, &type, &cnt, &qpost);
+        DecideService(readBuf, n, &username, &pwd, &msg, &bname, &comment, &type, &cnt, &qpost, &title, &content);
 
         /*Update userIndex[] base on clientIdx, tmp*/
         DoService(type, cnt, username, pwd, msg, bname, clientIdx, tmp);
-        cout << type << " " << endl;
         
         sendMessage(writeBuf, tmp, sockfd);                     
 
@@ -372,12 +376,13 @@ There is no passing by reference in C code, but C++ has.
 2. Username and pwd are pointer variables, and we want to update them to "address of target string" without return, 
     so need to pass the address of pointer variables to the function, so does msg.
 */
+/* MMMMMMMMMMMAAAAAAAAAAAAATTTTTTTTTTTAAAAAAAAAAAAAAIIIIIIIIIIIIIINNNNNNNNNNNNNNN 需要做好，現在切割字串使用兩種版本*/
 void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg, char **bname, char **comment,
-                    int *type, int *cnt, int *qpost)
+                    int *type, int *cnt, int *qpost, string *title, string *content)
 {
-    char msg_t[MAXLINE], *order;
+    char *order;
+    string msg_t = readBuf;
     readBuf[n-1] = '\0';
-    strcpy(msg_t, readBuf);
     order = strtok(readBuf, " ");
     
     while (order != NULL)
@@ -409,15 +414,15 @@ void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg
         if (*type == 1 && *cnt == 1) *username = order;
         else if (*type == 1 && *cnt == 2) *pwd = order;
 
-        if (*type == 6 && *cnt == 1) *username = order;
-        else if (*type == 6 && *cnt >=2)
-        {
-            *msg = strtok(msg_t, "\"");
-            while (*msg != NULL) {
-                *msg = strtok(NULL, "\"");
-                break;
-            }
-        }
+        // if (*type == 6 && *cnt == 1) *username = order;
+        // else if (*type == 6 && *cnt >=2)
+        // {
+        //     *msg = strtok(msg_t, "\"");
+        //     while (*msg != NULL) {
+        //         *msg = strtok(NULL, "\"");
+        //         break;
+        //     }
+        // }
 
         if (*type == 8 && *cnt == 1) *username = order;
 
@@ -425,7 +430,34 @@ void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg
 
         /*條件複雜，之後在處理***********************************************************************************/
         if (*type == 10 && *cnt == 1) *bname   = order;
-        // else if (*type == 10 && )
+        else if (*type == 10 && *cnt >= 2)
+        {
+            vector<string> words{};
+            string delimiter = "--";
+            size_t pos;
+            bool first = true;
+
+            while ((pos = msg_t.find(delimiter)) != string::npos) {
+                words.push_back(msg_t.substr(0, pos));
+                msg_t.erase(0, pos + delimiter.length());
+            }
+            words.push_back(msg_t);
+            
+            delimiter = " ";
+            for (const auto &str : words) {
+                if (first) first = false;
+                else{
+                    int sp = str.find(" ");
+                    string key = str.substr(0, sp);
+                    string str_cpy = str;
+                    str_cpy.erase(0, sp + delimiter.length());
+                    str_cpy.erase(std::remove(str_cpy.begin(), str_cpy.end(), '\n'), str_cpy.end());
+                    if (key.compare("title") == 0)          *title = str_cpy;
+                    else if (key.compare("content") == 0)   *content = str_cpy;
+                }
+            }
+            break;
+        }
 
         if (*type == 12 && *cnt == 1) *bname   = order;
 
