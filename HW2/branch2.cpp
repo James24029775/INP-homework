@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <iostream>
 #include <algorithm>
+#include <ctime>
 #include <vector>
 using namespace std;
 
@@ -32,17 +33,23 @@ void    err_sys(const char* x);
 void    Initialization();
 void    sendMessage(string msg, int sockfd);
 void    DecideService(char *readBuf, int n, string *username, string *pwd, string *msg, string *bname, string *comment, int *type, int *cnt, int *qpost, string *title, string *content);
-void    DoService(int type, int cnt, string username, string pwd, string msg, string bname, string title, string content, int clientIdx, string *tmp);
+void    DoService(int type, int cnt, string username, string pwd, string msg, string bname, string title, string content, int qpost, int clientIdx, string *tmp);
 void    popMsg(int idx, int msgindex, string *tmp);
 void    storeUsername(string username, string pwd);
 void    storeBoardInfo(string bname, string username);
+void    storePost(string bname, string username, string title, string content);
 void    showBoardList(string *tmp);
 void    showUserList(string tmp);
 void    showMsgBox(string *tmp, int index);
+void    showPostList(string *tmp, int index);
+void    showPost(string *tmp, int qpost);
 void    Welcome(int sockfd);
 void    showPrompt(int sockfd);
 bool    MessageBox(int sockfd, int clientIdx);
 bool    isMsgLeft(int index);
+string  accessTime();
+string  tranBR(string content);
+
 bool    checkForm(int type, int cnt);
 int     checkUserIfExist(string username);
 int     checkBnameIfExist(string bname);
@@ -56,18 +63,22 @@ typedef class userInfo{
         userInfo() {loginOrNot = false;}
 } userInfo;
 
-typedef class boardInfo{
-    public:
-        string bname;
-        string author;
-} boardInfo;
-
 typedef class postInfo{
     public:
-        vector<string> title;
-        vector<string> content;
-        vector<string> author;
+        string author;
+        string title;
+        string content;
+        string date;
+        postInfo(string a, string b, string c, string d): author(a), title(b), content(c), date(d){} 
 } postInfo;
+
+typedef class boardInfo{
+    public:
+        string author;
+        string bname;
+        vector<int> Vpost;
+        boardInfo(string a, string b): author(a), bname(b) {}
+} boardInfo;
 
 typedef struct msgIndex{
     int index;
@@ -90,9 +101,11 @@ char    boardContent[K][KK];
 bool    CUseOrNot[MaxConnection];
 int     userIndex[MaxConnection];
 int     bcnt = 0;
+int     pcnt = 0;
 
 vector<boardInfo> VboardInfo;
 vector<postInfo> VpostInfo;
+vector<bool>    VpostExist;
 
 int main(int argc, char *argv[])
 {
@@ -130,8 +143,6 @@ int main(int argc, char *argv[])
 
     /* Initialize global variables account*/
     Initialization();
-    for (int z = 0 ; z < MaxConnection ; z++) cout << userIndex[z] << ' ';
-    cout << endl;
 
     /* Initialize select's variables*/
     maxi = -1;
@@ -153,8 +164,7 @@ int main(int argc, char *argv[])
             connfd = accept(listenfd, (SA *) &cliaddr, &clilen);
             Welcome(connfd);
             showPrompt(connfd);
-            // printf("new client: %s, port %d\n", inet_ntop(AF_INET, &cliaddr.sin_addr, 4, NULL), ntohs(cliaddr.sin_port));
-
+            
             /* Update select's parameter.*/
             int tmp;
             for (int i = 0 ; i < FD_SETSIZE ; i++)
@@ -233,7 +243,7 @@ again:
         DecideService(readBuf, n, &username, &pwd, &msg, &bname, &comment, &type, &cnt, &qpost, &title, &content);
 
         /*Update userIndex[] base on clientIdx, tmp*/
-        DoService(type, cnt, username, pwd, msg, bname, title, content, clientIdx, &tmp);
+        DoService(type, cnt, username, pwd, msg, bname, title, content, qpost-1, clientIdx, &tmp);
 
         for (int z = 0 ; z < acnt ; z++) cout << VuserInfo[z].name << ' ';
         cout << endl;
@@ -308,19 +318,29 @@ int cmpfunc (const void * a, const void * b)
     return nameA.compare(nameB);
 }
 
-void showPostList(char *tmp, int index)
+void showPost(string *tmp, int qpost)
+{
+// Author: <Author1>
+// Title: <Title1>
+// Date: <Date1>
+// --
+// <content>
+// --
+// <User1>: <Comment1>
+    *tmp = "Author: " + VpostInfo[qpost].author + "\nTitle: " + VpostInfo[qpost].title + "\nDate: " + VpostInfo[qpost].date + "\n--\n" + VpostInfo[qpost].content + "\n--\n";
+    /******************************這裡要加comment**************************************************************************/
+}
+
+void showPostList(string *tmp, int index)
 {
     char i2a[K];
-    strcat(tmp, "S/N Title Author Date\n");
-    for (int i = 0 ; i < bcnt ; i++)
+    int pi;
+    *tmp += (string)"S/N Title Author Date\n";
+    for (int i = 0 ; i < VboardInfo[index].Vpost.size() ; i++)
     {
-        sprintf(i2a, "%d", i+1);
-        strcat(tmp, i2a);
-        strcat(tmp, " ");
-        strcat(tmp, boardName[i]);
-        strcat(tmp, " ");
-        strcat(tmp, boardAuthor[i]);
-        strcat(tmp, "\n");
+        pi = VboardInfo[index].Vpost[i];
+        sprintf(i2a, "%d", pi+1);
+        *tmp += i2a + (string)" " + VpostInfo[pi].title + " " + VpostInfo[pi].author + " " + VpostInfo[pi].date + "\n";
     }
 }
 
@@ -378,11 +398,39 @@ void showUserList(string *tmp)
     }
 }
 
+void storePost(string bname, string author, string title, string content)
+{
+    int index;
+    string date = accessTime();
+    if ((index = checkBnameIfExist(bname)) != -1)
+    {
+        string t_content = tranBR(content);
+        postInfo tmp(author, title, t_content, date);
+        
+        VpostInfo.push_back(tmp);
+        VpostExist.push_back(true);
+        VboardInfo[index].Vpost.push_back(pcnt);
+        pcnt++;
+    }
+}
+
+string tranBR(string content)
+{
+    string delimiter = "<br>";
+    string ans;
+    size_t pos;
+    while ((pos = content.find(delimiter)) != string::npos) {
+        ans += content.substr(0, pos);
+        ans += "\n";
+        content.erase(0, pos + delimiter.length());
+    }
+    ans += content;
+    return ans;
+}
+
 void storeBoardInfo(string bname, string username)
 {
-    boardInfo tmp;
-    tmp.bname = bname;
-    tmp.author = username;
+    boardInfo tmp(username, bname);
     VboardInfo.push_back(tmp);
     bcnt++;
 }
@@ -411,7 +459,6 @@ There is no passing by reference in C code, but C++ has.
 2. Username and pwd are pointer variables, and we want to update them to "address of target string" without return, 
     so need to pass the address of pointer variables to the function, so does msg.
 */
-/*不知為何，如果地一行先打 create-board 會出現 segmentation fault*********************************************************/
 /* MMMMMMMMMMMAAAAAAAAAAAAATTTTTTTTTTTAAAAAAAAAAAAAAIIIIIIIIIIIIIINNNNNNNNNNNNNNN 需要做好，現在切割字串使用兩種版本*/
 void DecideService(char *readBuf, int n, string *username, string *pwd, string *msg, string *bname, string *comment,
                     int *type, int *cnt, int *qpost, string *title, string *content)
@@ -465,7 +512,7 @@ void DecideService(char *readBuf, int n, string *username, string *pwd, string *
         if (*type == 9 && *cnt == 1) *bname    = order;
 
         if (*type == 10 && *cnt == 1) *bname   = order;
-        else if (*type == 10 && *cnt >= 2)
+        else if (*type == 10 && *cnt == 2)
         {
             vector<string> words{};
             string delimiter = "--";
@@ -490,7 +537,6 @@ void DecideService(char *readBuf, int n, string *username, string *pwd, string *
                     else if (key.compare("content") == 0)   *content = str_cpy;
                 }
             }
-            break;
         }
 
         if (*type == 12 && *cnt == 1) *bname   = order;
@@ -513,7 +559,7 @@ void DecideService(char *readBuf, int n, string *username, string *pwd, string *
 }
 
 void DoService(int type, int cnt, string username, string pwd, string msg, string bname, 
-    string title, string content, int clientIdx, string *tmp)
+    string title, string content, int qpost, int clientIdx, string *tmp)
 {
     int RegForClient;
     int MsgForClient;
@@ -540,7 +586,10 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
 
             // Tackle Login
             case 1:
-                if (VuserInfo[userIndex[clientIdx]].loginOrNot){
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Login failed.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot){
                     *tmp = "Please logout first.\n";
                 }
                 else{
@@ -578,7 +627,10 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
 
             // Tackle Who am I
             case 3:
-                if (VuserInfo[userIndex[clientIdx]].loginOrNot){
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot){
                     *tmp = VuserInfo[userIndex[clientIdx]].name;
                     *tmp += "\n";
                 }
@@ -603,12 +655,14 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
 
             // Tackle Send msg
             case 6:
-                if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
                     *tmp = "Please login first.\n";
                 }
                 else if ((MsgForClient = checkUserIfExist(username)) != -1){
                     VuserInfo[MsgForClient].msgbox[userIndex[clientIdx]].push_back(msg);
-                    // strcpy(msgBox[MsgForClient][userIndex[clientIdx]][msgWrite[MsgForClient][userIndex[clientIdx]]], msg);
                     msgWrite[MsgForClient][userIndex[clientIdx]]++;
                     if (msgWrite[MsgForClient][userIndex[clientIdx]] == K) msgWrite[MsgForClient][userIndex[clientIdx]] = 0;
                 }
@@ -619,7 +673,10 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
 
             // Tackle List-msg
             case 7:
-                if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
                     *tmp = "Please login first.\n";
                 }
                 else if (isMsgLeft(userIndex[clientIdx])){
@@ -633,7 +690,10 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
 
             // Tackle Receive
             case 8:
-                if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
                     *tmp = "Please login first.\n";
                 }
                 else if ((RecForClient = checkUserIfExist(username)) != -1){
@@ -649,7 +709,10 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
 
             // Tackle create-board
             case 9:
-                if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
                     *tmp= "Please login first.\n";
                 }
                 else if ((CBForClient = checkBnameIfExist(bname)) == -1){
@@ -663,12 +726,15 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
 
             // Tackle create-post
             case 10:
-                if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                if (VuserInfo.size() == 0) {
                     *tmp = "Please login first.\n";
                 }
-                // *****************************************************************************尚未處理，等list-post完成後再做
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                    *tmp = "Please login first.\n";
+                }
                 else if ((CPForClient = checkBnameIfExist(bname)) != -1){
-                    // storePost(bname, accountName[userIndex[clientIdx]]);
+                    storePost(bname, VuserInfo[userIndex[clientIdx]].name, title, content);
+                    *tmp = "Create post successfully.\n";
                 }
                 else{
                     *tmp = "Board does not exist.\n";
@@ -682,12 +748,24 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
 
             // Tackle list-post
             case 12:
-                // if ((LPForClient = checkBnameIfExist(bname)) != -1){
-                //     showPostList(tmp);
-                // }
-                // else{
-                //     strcpy(tmp, "Board does not exist.\n");
-                // }
+                if ((LPForClient = checkBnameIfExist(bname)) != -1){
+                    showPostList(tmp, LPForClient);
+                }
+                else{
+                    *tmp = "Board does not exist.\n";
+                }
+                break;
+
+            
+            // Tackle read
+            case 13:
+                if (qpost < pcnt && VpostExist[qpost]){
+                    showPost(tmp, qpost);
+                }
+                else{
+                    *tmp = "Post does not exist.\n";
+                }
+                
                 break;
 
             default:
@@ -735,6 +813,19 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
     }
 }
 
+string accessTime()
+{
+    char i2a[K];
+    string date;
+    time_t now = time(0);
+    tm *ltm = localtime(&now);
+    sprintf(i2a, "%d", 1 + ltm->tm_mon);
+    date += i2a + (string)"/";
+    sprintf(i2a, "%d", 1 + ltm->tm_mday);
+    date += i2a;
+    return date;
+}
+
 void sendMessage(string msg, int sockfd)
 {
     char buf[MAXLINE];
@@ -749,8 +840,6 @@ bool checkForm(int type, int cnt){
     if (type == 6 && cnt <= 2) return false;
     if (type == 8 && cnt != 2) return false;
     if (type == 9 && cnt != 2) return false;
-    // 條件複雜，之後處理********************************************************************************************************
-    // if (type == 10 && cnt != 1) return false;
     if (type == 12 && cnt != 2) return false;
     if (type == 13 && cnt != 2) return false;
     if (type == 14 && cnt != 2) return false;
@@ -759,6 +848,7 @@ bool checkForm(int type, int cnt){
     if (type == 16 && cnt != 3) return false;
     return true;
 }
+
 
 int checkBnameIfExist(string bname)
 {
