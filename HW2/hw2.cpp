@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <iostream>
 #include <algorithm>
+#include <ctime>
 #include <vector>
 using namespace std;
 
@@ -30,31 +31,77 @@ void    err_sys(const char* x);
 
 /*Myself*/
 void    Initialization();
-void    sendMessage(char* buf, char* msg, int sockfd);
-void    DecideService(char *readBuf, int n, char **username, char **pwd, char **msg, char **bname, char **comment, int *type, int *cnt, int *qpost, string *title, string *content);
-void    DoService(int type, int cnt, char *username, char *pwd, char *msg, char *bname, int clientIdx, char *tmp);
-void    popMsg(int idx, int msgindex, char *tmp);
-void    storeUsername(char *username, char *pwd);
-void    storeBoardInfo(char *bname, char *username);
-void    showBoardList(char *tmp);
-void    showUserList(char *tmp);
-void    showMsgBox(char *tmp, int index);
+void    sendMessage(string msg, int sockfd);
+void    DecideService(char *readBuf, int n, string *username, string *pwd, string *msg, string *bname, string *comment, int *type, int *cnt, int *qpost, string *title, string *content);
+void    DoService(int type, int cnt, string username, string pwd, string msg, string bname, string title, string content, string comment, int qpost, int clientIdx, string *tmp);
+void    popMsg(int idx, int msgindex, string *tmp);
+void    storeUsername(string username, string pwd);
+void    storeBoardInfo(string bname, string username);
+void    storePost(string bname, string username, string title, string content);
+void    storeComment(int qpost, string name, string comment);
+void    showBoardList(string *tmp);
+void    showUserList(string tmp);
+void    showMsgBox(string *tmp, int index);
+void    showPostList(string *tmp, int index);
+void    showPost(string *tmp, int qpost);
 void    Welcome(int sockfd);
 void    showPrompt(int sockfd);
 bool    MessageBox(int sockfd, int clientIdx);
 bool    isMsgLeft(int index);
+string  accessTime();
+string  tranBR(string content);
+
 bool    checkForm(int type, int cnt);
-int     checkUserIfExist(char *username);
-int     checkBnameIfExist(char *bname);
+int     checkUserIfExist(string username);
+int     checkBnameIfExist(string bname);
+
+typedef class userInfo{
+    public:
+        string name;
+        string pwd;
+        bool   loginOrNot;
+        vector<string> msgbox[K];
+        userInfo() {loginOrNot = false;}
+} userInfo;
+
+typedef class commentInfo{
+    public:
+        string author;
+        string comment;
+        commentInfo(string a, string b):author(a), comment(b){}
+} commentInfo;
+
+typedef class postInfo{
+    public:
+        string author;
+        string title;
+        string content;
+        string date;
+        vector<commentInfo> VcommentInfo;
+        postInfo(string a, string b, string c, string d): author(a), title(b), content(c), date(d){} 
+} postInfo;
+
+typedef class boardInfo{
+    public:
+        string author;
+        string bname;
+        vector<int> Vpost;
+        boardInfo(string a, string b): author(a), bname(b) {}
+} boardInfo;
+
+typedef struct msgIndex{
+    int index;
+    string name;
+} msgIndex;
+
 
 /*HW1 variables*/
-char    accountName[K][K];
-char    accountPwd[K][K];
 char    msgBox[K][K][K][KK];
-bool    loginOrNot[K];
 int     msgWrite[K][K];
 int     msgRead[K][K];
 int     acnt = 0;
+
+vector<userInfo> VuserInfo;
 
 /*HW2 variables*/
 char    boardName[K][KK];
@@ -63,14 +110,14 @@ char    boardContent[K][KK];
 bool    CUseOrNot[MaxConnection];
 int     userIndex[MaxConnection];
 int     bcnt = 0;
+int     pcnt = 0;
 
+vector<boardInfo> VboardInfo;
+vector<postInfo> VpostInfo;
+vector<bool>    VpostExist;
 
-typedef struct msgIndex{
-    int index;
-    char name[K];
-} msgIndex;
-
-int main(int argc, char *argv[]){
+int main(int argc, char *argv[])
+{
 
     if (argc != 2){
         err_sys("server usage: ./hw1 [port number]");
@@ -105,9 +152,6 @@ int main(int argc, char *argv[]){
 
     /* Initialize global variables account*/
     Initialization();
-    for (int z = 0 ; z < MaxConnection ; z++) cout << userIndex[z] << ' ';
-    cout << userIndex << endl;
-    cout << endl;
 
     /* Initialize select's variables*/
     maxi = -1;
@@ -129,8 +173,7 @@ int main(int argc, char *argv[]){
             connfd = accept(listenfd, (SA *) &cliaddr, &clilen);
             Welcome(connfd);
             showPrompt(connfd);
-            // printf("new client: %s, port %d\n", inet_ntop(AF_INET, &cliaddr.sin_addr, 4, NULL), ntohs(cliaddr.sin_port));
-
+            
             /* Update select's parameter.*/
             int tmp;
             for (int i = 0 ; i < FD_SETSIZE ; i++)
@@ -178,27 +221,27 @@ int main(int argc, char *argv[]){
 }
 
 
-bool MessageBox(int sockfd, int clientIdx){
+bool MessageBox(int sockfd, int clientIdx)
+{
+    char readBuf[MAXLINE];
     ssize_t n;
-    char readBuf[MAXLINE], writeBuf[MAXLINE], tmp[K];
-    char *username, *pwd, *msg, *bname, *comment;
+    string username, pwd, msg, bname, comment, title, content, tmp;
     int type=-1, cnt=0, qpost=-1;
     bool isTrueForm=true;
-    string title, content;
 
 again:
     /*Reset*/
     cnt = 0;
     type = -1;
     qpost = -1;
-    memset(tmp, '\0', K);
-    comment = (char*)"";
-    pwd = (char*)"";
-    username = (char*)"";
-    bname = (char*)"";
-    msg = (char*)"";
+    comment = "";
+    pwd = "";
+    username = "";
+    bname = "";
+    msg = "";
     title = "";
     content = "";
+    tmp = "";
     
     bzero(&readBuf, MAXLINE);
     /*Check for disconnection*/
@@ -210,9 +253,14 @@ again:
         DecideService(readBuf, n, &username, &pwd, &msg, &bname, &comment, &type, &cnt, &qpost, &title, &content);
 
         /*Update userIndex[] base on clientIdx, tmp*/
-        DoService(type, cnt, username, pwd, msg, bname, clientIdx, tmp);
+        DoService(type, cnt, username, pwd, msg, bname, title, content, comment, qpost-1, clientIdx, &tmp);
+
+        for ( int z = 0 ; z < MaxConnection ; z++){
+            cout << userIndex[z] << ' ';
+        }
+        cout << endl;
         
-        sendMessage(writeBuf, tmp, sockfd);                     
+        sendMessage(tmp, sockfd);                     
 
         if (n < 0 && errno == EINTR){
             goto again;
@@ -227,19 +275,19 @@ again:
 void Welcome(int sockfd)
 {
     char writeBuf[MAXLINE];
-    sendMessage(writeBuf, WELCOME, sockfd);                                 /*Deal with WELCOME*/
+    sendMessage(WELCOME, sockfd);                                 /*Deal with WELCOME*/
 }
 
 void showPrompt(int sockfd)
 {
     char writeBuf[MAXLINE];
-    sendMessage(writeBuf, PROMPT, sockfd);                                 /*Deal with %*/
+    sendMessage(PROMPT, sockfd);                                 /*Deal with %*/
 }
 
-void popMsg(int idx, int msgindex, char *tmp)
+void popMsg(int idx, int msgindex, string *tmp)
 {
-    strcpy(tmp, msgBox[idx][msgindex][msgRead[idx][msgindex]]);
-    strcat(tmp, "\n");
+    *tmp = msgBox[idx][msgindex][msgRead[idx][msgindex]];
+    *tmp += "\n";
     msgRead[idx][msgindex]++;
     if (msgRead[idx][msgindex] == K) msgRead[idx][msgindex] = 0;
 }
@@ -259,8 +307,6 @@ void Initialization()
     int k = 0;
     for ( i=0 ; i < K ; i++)
     {
-        memset(accountName[i], '\0', K);
-        memset(accountPwd[i], '\0', K);
         memset(boardName[i], '\0', KK);
         memset(boardAuthor[i], '\0', KK);
         memset(boardContent[i], '\0', K);
@@ -274,16 +320,42 @@ void Initialization()
     {
         userIndex[i]       = -1;
     }
-    memset(loginOrNot, false, K);
     memset(CUseOrNot, false, MaxConnection);
 }
 
 int cmpfunc (const void * a, const void * b)
 {
-   return strcmp((*(msgIndex*)a).name, (*(msgIndex*)b).name);
+    string nameA = (*(msgIndex*)a).name;
+    string nameB = (*(msgIndex*)b).name;
+    return nameA.compare(nameB);
 }
 
-void showMsgBox(char *tmp, int index)
+void showPost(string *tmp, int qpost)
+{
+    *tmp = "Author: " + VpostInfo[qpost].author + "\nTitle: " + VpostInfo[qpost].title + "\nDate: " + VpostInfo[qpost].date + "\n--\n" + VpostInfo[qpost].content + "\n--\n";
+    for (int i = 0 ; i < VpostInfo[qpost].VcommentInfo.size() ; i++)
+    {
+        *tmp += VpostInfo[qpost].VcommentInfo[i].author + ": " + VpostInfo[qpost].VcommentInfo[i].comment;
+    }
+}
+
+void showPostList(string *tmp, int index)
+{
+    char i2a[K];
+    int pi;
+    *tmp += (string)"S/N Title Author Date\n";
+    for (int i = 0 ; i < VboardInfo[index].Vpost.size() ; i++)
+    {
+        pi = VboardInfo[index].Vpost[i];
+        if (VpostExist[pi])
+        {
+            sprintf(i2a, "%d", pi+1);
+            *tmp += i2a + (string)" " + VpostInfo[pi].title + " " + VpostInfo[pi].author + " " + VpostInfo[pi].date + "\n";
+        }
+    }
+}
+
+void showMsgBox(string *tmp, int index)
 {
     msgIndex msgindex[acnt];
     int i = 0, target = 0, msgLeft = 0;
@@ -292,7 +364,7 @@ void showMsgBox(char *tmp, int index)
     for(i = 0 ; i < acnt ; i++)
     {
         msgindex[i].index = i;
-        strcpy(msgindex[i].name, accountName[i]);
+        msgindex[i].name = VuserInfo[i].name;
     }
     qsort(msgindex, acnt, sizeof(msgIndex), cmpfunc);
 
@@ -303,81 +375,108 @@ void showMsgBox(char *tmp, int index)
         if (msgLeft)
         {
             sprintf(i2a, "%d", msgLeft);
-            strcat(tmp, i2a);
-            strcat(tmp, " message from ");
-            strcat(tmp, accountName[target]);
-            strcat(tmp, ".\n");
+            *tmp += i2a + (string)" message from " + VuserInfo[i].name + ".\n";
         }
     }
 }
 
 
-void showBoardList(char *tmp)
+void showBoardList(string *tmp)
 {
     char i2a[K];
-    strcat(tmp, "Index Name Moderator\n");
+    *tmp = "Index Name Moderator\n";
     for (int i = 0 ; i < bcnt ; i++)
     {
         sprintf(i2a, "%d", i+1);
-        strcat(tmp, i2a);
-        strcat(tmp, " ");
-        strcat(tmp, boardName[i]);
-        strcat(tmp, " ");
-        strcat(tmp, boardAuthor[i]);
-        strcat(tmp, "\n");
+        *tmp += i2a + (string)" " + VboardInfo[i].bname + " " + VboardInfo[i].author + "\n";
     }
 }
 
-void showUserList(char *tmp)
+void showUserList(string *tmp)
 {
     msgIndex msgindex[acnt];
     int i = 0;
     for(i = 0 ; i < acnt ; i++)
     {
         msgindex[i].index = i;
-        strcpy(msgindex[i].name, accountName[i]);
+        msgindex[i].name = VuserInfo[i].name;
     }
     qsort(msgindex, acnt, sizeof(msgIndex), cmpfunc);
 
     for (i = 0 ; i < acnt ; i++)
     {
-        strcat(tmp, accountName[msgindex[i].index]);
-        strcat(tmp, "\n");
+        *tmp += VuserInfo[msgindex[i].index].name + "\n";
     }
 }
 
-void storeBoardInfo(char *bname, char *username)
+void storeComment(int qpost, string author, string comment)
 {
-    strcpy(boardName[bcnt], bname);
-    strcpy(boardAuthor[bcnt], username);
+    commentInfo tmp(author, comment);
+    VpostInfo[qpost].VcommentInfo.push_back(tmp);
+}
+
+void storePost(string bname, string author, string title, string content)
+{
+    int index;
+    string date = accessTime();
+    if ((index = checkBnameIfExist(bname)) != -1)
+    {
+        string t_content = tranBR(content);
+        postInfo tmp(author, title, t_content, date);
+        
+        VpostInfo.push_back(tmp);
+        VpostExist.push_back(true);
+        VboardInfo[index].Vpost.push_back(pcnt);
+        pcnt++;
+    }
+}
+
+string tranBR(string content)
+{
+    string delimiter = "<br>";
+    string ans;
+    size_t pos;
+    while ((pos = content.find(delimiter)) != string::npos) {
+        ans += content.substr(0, pos);
+        ans += "\n";
+        content.erase(0, pos + delimiter.length());
+    }
+    ans += content;
+    return ans;
+}
+
+void storeBoardInfo(string bname, string username)
+{
+    boardInfo tmp(username, bname);
+    VboardInfo.push_back(tmp);
     bcnt++;
 }
 
-void storeUsername(char *username, char *pwd)
+void storeUsername(string username, string pwd)
 {
-    strcpy(accountName[acnt], username);
-    strcpy(accountPwd[acnt], pwd);
+    userInfo tmp;
+    tmp.name = username;
+    tmp.pwd = pwd;
+    VuserInfo.push_back(tmp);
     acnt++;
 }
 
-int checkUserIfExist(char *username)
+int checkUserIfExist(string username)
 {
-    int i = 0;
-    for(; i < acnt; i++)
+    for(int i = 0; i < acnt; i++)
     {
-        if (strcmp(accountName[i], username) == 0) return i;
+        if (username.compare(VuserInfo[i].name) == 0) return i;
     }
     return -1;
 }
 
 /* Tips:
-There is no passing by reference in C code, but C++ has.
-1. You just can use passing by pointer in C code.
-2. Username and pwd are pointer variables, and we want to update them to "address of target string" without return, 
-    so need to pass the address of pointer variables to the function, so does msg.
+    There is no passing by reference in C code, but C++ has.
+    1. You just can use passing by pointer in C code.
+    2. Username and pwd are pointer variables, and we want to update them to "address of target string" without return, 
+        so need to pass the address of pointer variables to the function, so does msg.
 */
-/* MMMMMMMMMMMAAAAAAAAAAAAATTTTTTTTTTTAAAAAAAAAAAAAAIIIIIIIIIIIIIINNNNNNNNNNNNNNN 需要做好，現在切割字串使用兩種版本*/
-void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg, char **bname, char **comment,
+void DecideService(char *readBuf, int n, string *username, string *pwd, string *msg, string *bname, string *comment,
                     int *type, int *cnt, int *qpost, string *title, string *content)
 {
     char *order;
@@ -428,15 +527,13 @@ void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg
 
         if (*type == 9 && *cnt == 1) *bname    = order;
 
-        /*條件複雜，之後在處理***********************************************************************************/
         if (*type == 10 && *cnt == 1) *bname   = order;
-        else if (*type == 10 && *cnt >= 2)
+        else if (*type == 10 && *cnt == 2)
         {
             vector<string> words{};
             string delimiter = "--";
             size_t pos;
             bool first = true;
-
             while ((pos = msg_t.find(delimiter)) != string::npos) {
                 words.push_back(msg_t.substr(0, pos));
                 msg_t.erase(0, pos + delimiter.length());
@@ -456,7 +553,6 @@ void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg
                     else if (key.compare("content") == 0)   *content = str_cpy;
                 }
             }
-            break;
         }
 
         if (*type == 12 && *cnt == 1) *bname   = order;
@@ -465,12 +561,46 @@ void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg
 
         if (*type == 14 && *cnt == 1) *qpost   = atoi(order);
 
-        /*條件複雜，之後在處理***********************************************************************************/
         if (*type == 15 && *cnt == 1) *qpost   = atoi(order);
-        // else if ()
+        else if (*type == 15 && *cnt == 2)
+        {
+            vector<string> words{};
+            string delimiter = "--";
+            size_t pos;
+            bool first = true;
+            while ((pos = msg_t.find(delimiter)) != string::npos) {
+                words.push_back(msg_t.substr(0, pos));
+                msg_t.erase(0, pos + delimiter.length());
+            }
+            words.push_back(msg_t);
+            
+            delimiter = " ";
+            for (const auto &str : words) {
+                if (first) first = false;
+                else{
+                    int sp = str.find(" ");
+                    string key = str.substr(0, sp);
+                    string str_cpy = str;
+                    str_cpy.erase(0, sp + delimiter.length());
+                    str_cpy.erase(std::remove(str_cpy.begin(), str_cpy.end(), '\n'), str_cpy.end());
+                    if (key.compare("title") == 0)          *title = str_cpy;
+                    else if (key.compare("content") == 0)   *content = str_cpy;
+                }
+            }
+        }
 
         if (*type == 16 && *cnt == 1) *qpost   = atoi(order);
-        else if (*type == 16 && *cnt == 2) *comment = order;
+        else if (*type == 16 && *cnt == 2) {
+            string delimiter = " ";
+            size_t pos;
+            int cnt = 0;
+            while ((pos = msg_t.find(delimiter)) != string::npos) {
+                if (cnt == 2) break;
+                msg_t.erase(0, pos + delimiter.length());
+                cnt++;
+            }
+            *comment = msg_t;
+        }
 
 
         order = strtok(NULL, " ");
@@ -478,12 +608,15 @@ void DecideService(char *readBuf, int n, char **username, char **pwd, char **msg
     }
 }
 
-void DoService(int type, int cnt, char *username, char *pwd, char *msg, char *bname, int clientIdx, char *tmp)
+void DoService(int type, int cnt, string username, string pwd, string msg, string bname, 
+    string title, string content, string comment, int qpost, int clientIdx, string *tmp)
 {
     int RegForClient;
     int MsgForClient;
     int RecForClient;
     int CBForClient;
+    int CPForClient;
+    int LPForClient;
 
     int isTrueForm = checkForm(type, cnt);
     if (isTrueForm){
@@ -494,35 +627,40 @@ void DoService(int type, int cnt, char *username, char *pwd, char *msg, char *bn
                 RegForClient = checkUserIfExist(username);
                 if (RegForClient == -1){
                     storeUsername(username, pwd);
-                    strcpy(tmp, "Register successfully.\n");
+                    *tmp = "Register successfully.\n";
                 }
                 else {
-                    strcpy(tmp, "Username is already used.\n");
+                    *tmp = "Username is already used.\n";
                 }
                 break;
 
             // Tackle Login
             case 1:
-                if (loginOrNot[userIndex[clientIdx]]){
-                    strcat(tmp, "Please logout first.\n");
+                cout << userIndex[clientIdx] << ' ' << VuserInfo[userIndex[clientIdx]].loginOrNot << endl;
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Login failed.\n";
+                }
+                else if (userIndex[clientIdx] != -1){
+                    cout << "hi" << endl;
+                    *tmp = "Please logout first.\n";
                 }
                 else{
                     userIndex[clientIdx] = checkUserIfExist(username);
-                    if (loginOrNot[userIndex[clientIdx]]){
-                        strcpy(tmp, "Please logout first.\n");
+                    if (VuserInfo[userIndex[clientIdx]].loginOrNot){
+                        cout << "this" << endl;
+                        *tmp = "Please logout first.\n";
                         userIndex[clientIdx] = -1;
                     }
                     else if (userIndex[clientIdx] == -1){
-                        strcpy(tmp, "Login failed.\n");
+                        *tmp = "Login failed.\n";
                     }
-                    else if(strcmp(accountPwd[userIndex[clientIdx]], pwd) != 0){
-                        strcpy(tmp, "Login failed.\n");
+                    else if(pwd.compare(VuserInfo[userIndex[clientIdx]].pwd) != 0){
+                        *tmp = "Login failed.\n";
                     }
                     else{
-                        strcat(tmp, "Welcome, ");
-                        strcat(tmp, username);
-                        strcat(tmp, ".\n");
-                        loginOrNot[userIndex[clientIdx]] = true;
+                        *tmp = "Welcome, ";
+                        *tmp += (string)username+ ".\n";
+                        VuserInfo[userIndex[clientIdx]].loginOrNot = true;
                     }
                 }
                 break;
@@ -530,25 +668,27 @@ void DoService(int type, int cnt, char *username, char *pwd, char *msg, char *bn
             // Tackle Logout
             case 2:
                 if (userIndex[clientIdx] == -1){
-                    strcpy(tmp, "Please login first.\n");
+                    *tmp = "Please login first.\n";
                 }
                 else{
-                    loginOrNot[userIndex[clientIdx]] = false;
-                    strcat(tmp, "Bye, ");
-                    strcat(tmp, accountName[userIndex[clientIdx]]);
-                    strcat(tmp, ".\n");
+                    VuserInfo[userIndex[clientIdx]].loginOrNot = false;
+                    *tmp = "Bye, ";
+                    *tmp += VuserInfo[userIndex[clientIdx]].name + ".\n";
                     userIndex[clientIdx] = -1;
                 }
                 break;
 
             // Tackle Who am I
             case 3:
-                if (loginOrNot[userIndex[clientIdx]]){
-                    strcat(tmp, accountName[userIndex[clientIdx]]);
-                    strcat(tmp, "\n");
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot){
+                    *tmp = VuserInfo[userIndex[clientIdx]].name;
+                    *tmp += "\n";
                 }
                 else{
-                    strcpy(tmp, "Please login first.\n");
+                    *tmp = "Please login first.\n";
                 }
                 break;
 
@@ -559,47 +699,58 @@ void DoService(int type, int cnt, char *username, char *pwd, char *msg, char *bn
 
             // Tackle Exit
             case 5:
-                if (loginOrNot[userIndex[clientIdx]]){
-                    loginOrNot[userIndex[clientIdx]] = false;
-                    strcat(tmp, "Bye, ");
-                    strcat(tmp, accountName[userIndex[clientIdx]]);
-                    strcat(tmp, ".\n");
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Bye.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot){
+                    VuserInfo[userIndex[clientIdx]].loginOrNot = false;
+                    *tmp = "Bye, ";
+                    *tmp += VuserInfo[userIndex[clientIdx]].name + ".\n";
                 }
                 break;
 
             // Tackle Send msg
             case 6:
-                if (loginOrNot[userIndex[clientIdx]] == false){
-                    strcpy(tmp, "Please login first.\n");
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                    *tmp = "Please login first.\n";
                 }
                 else if ((MsgForClient = checkUserIfExist(username)) != -1){
-                    strcpy(msgBox[MsgForClient][userIndex[clientIdx]][msgWrite[MsgForClient][userIndex[clientIdx]]], msg);
+                    VuserInfo[MsgForClient].msgbox[userIndex[clientIdx]].push_back(msg);
                     msgWrite[MsgForClient][userIndex[clientIdx]]++;
                     if (msgWrite[MsgForClient][userIndex[clientIdx]] == K) msgWrite[MsgForClient][userIndex[clientIdx]] = 0;
                 }
                 else{
-                    strcpy(tmp, "User not existed.\n");
+                    *tmp = "User not existed.\n";
                 }
                 break;
 
             // Tackle List-msg
             case 7:
-                if (loginOrNot[userIndex[clientIdx]] == false){
-                    strcpy(tmp, "Please login first.\n");
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                    *tmp = "Please login first.\n";
                 }
                 else if (isMsgLeft(userIndex[clientIdx])){
                     showMsgBox(tmp, userIndex[clientIdx]);
                     break;
                 }
                 else{
-                    strcpy(tmp, "Your message box is empty.\n");
+                    *tmp = "Your message box is empty.\n";
                 }
                 break;
 
             // Tackle Receive
             case 8:
-                if (loginOrNot[userIndex[clientIdx]] == false){
-                    strcpy(tmp, "Please login first.\n");
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                    *tmp = "Please login first.\n";
                 }
                 else if ((RecForClient = checkUserIfExist(username)) != -1){
                     if (msgWrite[userIndex[clientIdx]][RecForClient] - msgRead[userIndex[clientIdx]][RecForClient] > 0){
@@ -608,26 +759,42 @@ void DoService(int type, int cnt, char *username, char *pwd, char *msg, char *bn
                     break;
                 }
                 else{
-                    strcpy(tmp, "User not existed.\n");
+                    *tmp = "User not existed.\n";
                 }
                 break;
 
             // Tackle create-board
             case 9:
-                if (loginOrNot[userIndex[clientIdx]] == false){
-                    strcpy(tmp, "Please login first.\n");
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                    *tmp= "Please login first.\n";
                 }
                 else if ((CBForClient = checkBnameIfExist(bname)) == -1){
-                    storeBoardInfo(bname, accountName[userIndex[clientIdx]]);
-                    strcpy(tmp, "Create board successfully.\n");
+                    storeBoardInfo(bname, VuserInfo[userIndex[clientIdx]].name);
+                    *tmp = "Create board successfully.\n";
                 }
                 else{
-                    strcpy(tmp, "Board already exists.\n");
+                    *tmp = "Board already exists.\n";
                 }
                 break;
 
             // Tackle create-post
             case 10:
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                    *tmp = "Please login first.\n";
+                }
+                else if ((CPForClient = checkBnameIfExist(bname)) != -1){
+                    storePost(bname, VuserInfo[userIndex[clientIdx]].name, title, content);
+                    *tmp = "Create post successfully.\n";
+                }
+                else{
+                    *tmp = "Board does not exist.\n";
+                }
                 break;
 
             // Tackle list-board
@@ -635,56 +802,150 @@ void DoService(int type, int cnt, char *username, char *pwd, char *msg, char *bn
                 showBoardList(tmp);
                 break;
 
+            // Tackle list-post
+            case 12:
+                if ((LPForClient = checkBnameIfExist(bname)) != -1){
+                    showPostList(tmp, LPForClient);
+                }
+                else{
+                    *tmp = "Board does not exist.\n";
+                }
+                break;
+
+            
+            // Tackle read
+            case 13:
+                if (qpost < pcnt && VpostExist[qpost]){
+                    showPost(tmp, qpost);
+                }
+                else{
+                    *tmp = "Post does not exist.\n";
+                }
+                break;
+
+            // Tackle delete post
+            case 14:
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                    *tmp = "Please login first.\n";
+                }
+                else if (!VpostExist[qpost] && qpost >= pcnt){
+                    *tmp = "Post does not exist.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].name != VpostInfo[qpost].author){
+                    *tmp = "Not the post owner.\n";
+                }
+                else{
+                    VpostExist[qpost] = false;
+                    *tmp = "Delete successfully.\n";
+                }
+                break;
+
+            // Tackle update post
+            case 15:
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                    *tmp = "Please login first.\n";
+                }
+                else if (!VpostExist[qpost] && qpost >= pcnt){
+                    *tmp = "Post does not exist.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].name != VpostInfo[qpost].author){
+                    *tmp = "Not the post owner.\n";
+                }
+                else{
+                    if (title.length() != 0)    VpostInfo[qpost].title = title;
+                    else if (content.length() != 0)  VpostInfo[qpost].content = tranBR(content);
+                    *tmp = "Update successfully.\n";
+                }
+                break;
+            
+            // Tackle comment
+            case 16:
+                if (VuserInfo.size() == 0) {
+                    *tmp = "Please login first.\n";
+                }
+                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
+                    *tmp = "Please login first.\n";
+                }
+                else if (!VpostExist[qpost] && qpost >= pcnt){
+                    *tmp = "Post does not exist.\n";
+                }
+                else{
+                    storeComment(qpost, VuserInfo[userIndex[clientIdx]].name, comment);
+                    *tmp = "Comment successfully.\n";
+                }
+                break;
+
+
             default:
-                strcpy(tmp, "Invalid service!\n");
+                *tmp = "Invalid service!\n";
                 break;
         }
     }
     else{
         switch(type){
             case 0: 
-                strcpy(tmp, "Usage: register <username> <password>\n"); 
+                *tmp = "Usage: register <username> <password>\n"; 
                 break;
             case 1: 
-                strcpy(tmp, "Usage: login <username> <password>\n");
+                *tmp = "Usage: login <username> <password>\n";
                 break;
             case 6:
-                strcpy(tmp, "Usage: send <username> <message>\n");
+                *tmp = "Usage: send <username> <message>\n";
                 break;
             case 8:
-                strcpy(tmp, "Usage: receive <username>\n");
+                *tmp = "Usage: receive <username>\n";
                 break;
             case 9:
-                strcpy(tmp, "Usage: create-board <name>\n");
+                *tmp = "Usage: create-board <name>\n";
                 break;
             case 10:
-                strcpy(tmp, "Usage: create-post <board-name> --title <title> --content <content>\n");
+                *tmp = "Usage: create-post <board-name> --title <title> --content <content>\n";
                 break;
             case 12:
-                strcpy(tmp, "Usage: list-post <board-name>\n");
+                *tmp = "Usage: list-post <board-name>\n";
                 break;
             case 13:
-                strcpy(tmp, "Usage: read <post-S/N>\n");
+                *tmp = "Usage: read <post-S/N>\n";
                 break;
             case 14:
-                strcpy(tmp, "Usage: delete-post <post-S/N>\n");
+                *tmp = "Usage: delete-post <post-S/N>\n";
                 break;
             case 15:
-                strcpy(tmp, "Usage: update-post <post-S/N> --title/content <new>\n");
+                *tmp = "Usage: update-post <post-S/N> --title/content <new>\n";
                 break;
             case 16:
-                strcpy(tmp, "Usage: comment <post-S/N> <comment>\n");
+                *tmp = "Usage: comment <post-S/N> <comment>\n";
                 break;
 
         }
     }
 }
 
-void sendMessage(char* buf, char* msg, int sockfd)
+string accessTime()
 {
+    char i2a[K];
+    string date;
+    time_t now = time(0);
+    tm *ltm = localtime(&now);
+    sprintf(i2a, "%d", 1 + ltm->tm_mon);
+    date += i2a + (string)"/";
+    sprintf(i2a, "%d", 1 + ltm->tm_mday);
+    date += i2a;
+    return date;
+}
+
+void sendMessage(string msg, int sockfd)
+{
+    char buf[MAXLINE];
     bzero(buf, MAXLINE);
-    strcpy(buf, msg);
-    writen(sockfd, buf, MAXLINE);
+    strcpy(buf, (char*)msg.c_str());
+    writen(sockfd, buf, strlen(buf));
 }
 
 bool checkForm(int type, int cnt){
@@ -693,23 +954,21 @@ bool checkForm(int type, int cnt){
     if (type == 6 && cnt <= 2) return false;
     if (type == 8 && cnt != 2) return false;
     if (type == 9 && cnt != 2) return false;
-    // 條件複雜，之後處理********************************************************************************************************
-    // if (type == 10 && cnt != 1) return false;
     if (type == 12 && cnt != 2) return false;
     if (type == 13 && cnt != 2) return false;
     if (type == 14 && cnt != 2) return false;
-    // 條件複雜，之後處理********************************************************************************************************
     // if (type == 15 && cnt != 1) return false;
-    if (type == 16 && cnt != 3) return false;
+    // if (type == 16 && cnt != 3) return false;
     return true;
 }
 
-int checkBnameIfExist(char *bname)
+
+int checkBnameIfExist(string bname)
 {
     int i = 0;
     for(; i < bcnt; i++)
     {
-        if (strcmp(boardName[i], bname) == 0) return i;
+        if (bname.compare(VboardInfo[i].bname) == 0) return i;
     }
     return -1;
 }
