@@ -350,7 +350,8 @@ void showPostList(string *tmp, int index)
         if (VpostExist[pi])
         {
             sprintf(i2a, "%d", pi+1);
-            *tmp += i2a + (string)" " + VpostInfo[pi].title + " " + VpostInfo[pi].author + " " + VpostInfo[pi].date + "\n";
+            *tmp += i2a + (string)" " + VpostInfo[pi].title + VpostInfo[pi].author + " " + VpostInfo[pi].date + "\n";
+            cout << '!' << VpostInfo[pi].author << '!' << endl;
         }
     }
 }
@@ -935,7 +936,7 @@ string accessTime()
     tm *ltm = localtime(&now);
     sprintf(i2a, "%d", 1 + ltm->tm_mon);
     date += i2a + (string)"/";
-    sprintf(i2a, "%d", 1 + ltm->tm_mday);
+    sprintf(i2a, "%d", ltm->tm_mday);
     date += i2a;
     return date;
 }
