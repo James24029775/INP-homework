@@ -30,6 +30,7 @@ void    Writen(int fd, void *ptr, size_t nbytes);
 void    err_sys(const char* x);
 
 /*Myself*/
+ssize_t Readline(int fd, void *ptr, size_t maxlen);
 void    Initialization();
 void    sendMessage(string msg, int sockfd);
 void    DecideService(char *readBuf, int n, string *username, string *pwd, string *msg, string *bname, string *comment, int *type, int *cnt, int *qpost, string *title, string *content);
@@ -51,7 +52,7 @@ bool    isMsgLeft(int index);
 string  accessTime();
 string  tranBR(string content);
 
-bool    checkForm(int type, int cnt);
+bool    checkForm(int type, int cnt, string bname, string title, string content, string comment, int qpost);
 int     checkUserIfExist(string username);
 int     checkBnameIfExist(string bname);
 
@@ -190,7 +191,6 @@ int main(int argc, char *argv[])
             if (tmp > maxi) maxi = tmp;
             if (connfd > maxfd) maxfd = connfd;
             FD_SET(connfd, &allset);
-
             if (--nready <= 0) continue;
         }
         
@@ -214,7 +214,6 @@ int main(int argc, char *argv[])
 				if (--nready <= 0)
 					break;				/* no more readable descriptors */
 			}
-            
         }
     }
     return 0;
@@ -245,7 +244,7 @@ again:
     
     bzero(&readBuf, MAXLINE);
     /*Check for disconnection*/
-    if ((n = read(sockfd, readBuf, MAXLINE)) < 0) return -1;                                
+    if ((n = Readline(sockfd, readBuf, MAXLINE)) < 0) return -1;                                
 
     else
     {
@@ -350,8 +349,7 @@ void showPostList(string *tmp, int index)
         if (VpostExist[pi])
         {
             sprintf(i2a, "%d", pi+1);
-            *tmp += i2a + (string)" " + VpostInfo[pi].title + VpostInfo[pi].author + " " + VpostInfo[pi].date + "\n";
-            cout << '!' << VpostInfo[pi].author << '!' << endl;
+            *tmp += i2a + (string)" " + VpostInfo[pi].title + " " + VpostInfo[pi].author + " " + VpostInfo[pi].date + "\n";
         }
     }
 }
@@ -528,8 +526,7 @@ void DecideService(char *readBuf, int n, string *username, string *pwd, string *
 
         if (*type == 9 && *cnt == 1) *bname    = order;
 
-        if (*type == 10 && *cnt == 1) *bname   = order;
-        else if (*type == 10 && *cnt == 2)
+        if (*type == 10 && *cnt == 1)
         {
             vector<string> words{};
             string delimiter = "--";
@@ -540,14 +537,22 @@ void DecideService(char *readBuf, int n, string *username, string *pwd, string *
                 msg_t.erase(0, pos + delimiter.length());
             }
             words.push_back(msg_t);
-            
             delimiter = " ";
+            int sp;
+            string str_cpy;
             for (const auto &str : words) {
-                if (first) first = false;
+                if (first){
+                    *bname = str;
+                    if ((sp = bname->find(delimiter)) == -1) continue;
+                    bname->erase(0, sp + delimiter.length());
+                    if ((sp = bname->find(delimiter)) == -1) continue;
+                    bname->erase(sp, sp + delimiter.length());
+                    first = false;
+                }
                 else{
-                    int sp = str.find(" ");
+                    sp = str.find(delimiter);
                     string key = str.substr(0, sp);
-                    string str_cpy = str;
+                    str_cpy = str;
                     str_cpy.erase(0, sp + delimiter.length());
                     str_cpy.erase(std::remove(str_cpy.begin(), str_cpy.end(), '\n'), str_cpy.end());
                     if (key.compare("title") == 0)          *title = str_cpy;
@@ -591,14 +596,15 @@ void DecideService(char *readBuf, int n, string *username, string *pwd, string *
         }
 
         if (*type == 16 && *cnt == 1) *qpost   = atoi(order);
-        else if (*type == 16 && *cnt == 2) {
+        else if (*type == 16 && *cnt == 2)
+        {
             string delimiter = " ";
             size_t pos;
-            int cnt = 0;
+            int cnt_ = 0;
             while ((pos = msg_t.find(delimiter)) != string::npos) {
-                if (cnt == 2) break;
+                if (cnt_ == 2) break;
                 msg_t.erase(0, pos + delimiter.length());
-                cnt++;
+                cnt_++;
             }
             *comment = msg_t;
         }
@@ -619,9 +625,11 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
     int CPForClient;
     int LPForClient;
 
-    int isTrueForm = checkForm(type, cnt);
-    if (isTrueForm){
-        switch(type){
+    int isTrueForm = checkForm(type, cnt, bname, title, content, comment, qpost);
+    if (isTrueForm)
+    {
+        switch(type)
+        {
             // Tackle Register
             case 0:
                 // If not exists, return -1, or return user index.
@@ -637,18 +645,15 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
 
             // Tackle Login
             case 1:
-                cout << userIndex[clientIdx] << ' ' << VuserInfo[userIndex[clientIdx]].loginOrNot << endl;
                 if (VuserInfo.size() == 0) {
                     *tmp = "Login failed.\n";
                 }
                 else if (userIndex[clientIdx] != -1){
-                    cout << "hi" << endl;
                     *tmp = "Please logout first.\n";
                 }
                 else{
                     userIndex[clientIdx] = checkUserIfExist(username);
                     if (VuserInfo[userIndex[clientIdx]].loginOrNot){
-                        cout << "this" << endl;
                         *tmp = "Please logout first.\n";
                         userIndex[clientIdx] = -1;
                     }
@@ -888,7 +893,8 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
                 break;
         }
     }
-    else{
+    else
+    {
         switch(type){
             case 0: 
                 *tmp = "Usage: register <username> <password>\n"; 
@@ -949,17 +955,18 @@ void sendMessage(string msg, int sockfd)
     writen(sockfd, buf, strlen(buf));
 }
 
-bool checkForm(int type, int cnt){
+bool checkForm(int type, int cnt, string bname, string title, string content, string comment, int qpost){
     if (type == 0 && cnt != 3) return false;
     if (type == 1 && cnt != 3) return false;
     if (type == 6 && cnt <= 2) return false;
     if (type == 8 && cnt != 2) return false;
     if (type == 9 && cnt != 2) return false;
+    if (type == 10 && (bname == "" || title == "" || content == "")) return false;
     if (type == 12 && cnt != 2) return false;
     if (type == 13 && cnt != 2) return false;
     if (type == 14 && cnt != 2) return false;
-    // if (type == 15 && cnt != 1) return false;
-    // if (type == 16 && cnt != 3) return false;
+    if (type == 15 && (title == "" && content == "") || qpost == -1) return false;
+    if (type == 16 && (comment == "" || qpost == -1))    return false;
     return true;
 }
 
@@ -972,12 +979,6 @@ int checkBnameIfExist(string bname)
         if (bname.compare(VboardInfo[i].bname) == 0) return i;
     }
     return -1;
-}
-
-void err_sys(const char* x) 
-{ 
-    perror(x); 
-    exit(1); 
 }
 
 /* include writen */
@@ -1009,4 +1010,76 @@ void Writen(int fd, void *ptr, size_t nbytes)
 {
 	if (writen(fd, ptr, nbytes) != nbytes)
 		err_sys("writen error");
+}
+
+static int	read_cnt;
+static char	*read_ptr;
+static char	read_buf[MAXLINE];
+
+static ssize_t
+my_read(int fd, char *ptr)
+{
+
+	if (read_cnt <= 0) {
+again:
+		if ( (read_cnt = read(fd, read_buf, sizeof(read_buf))) < 0) {
+			if (errno == EINTR)
+				goto again;
+			return(-1);
+		} else if (read_cnt == 0)
+			return(0);
+		read_ptr = read_buf;
+	}
+
+	read_cnt--;
+	*ptr = *read_ptr++;
+	return(1);
+}
+
+ssize_t
+readline(int fd, void *vptr, size_t maxlen)
+{
+	ssize_t	n, rc;
+	char	c, *ptr;
+
+	ptr = (char*)vptr;
+	for (n = 1; n < maxlen; n++) {
+		if ( (rc = my_read(fd, &c)) == 1) {
+			*ptr++ = c;
+			if (c == '\n')
+				break;	/* newline is stored, like fgets() */
+		} else if (rc == 0) {
+			*ptr = 0;
+			return(n - 1);	/* EOF, n - 1 bytes were read */
+		} else
+			return(-1);		/* error, errno set by read() */
+	}
+
+	*ptr = 0;	/* null terminate like fgets() */
+	return(n);
+}
+
+ssize_t
+readlinebuf(void **vptrptr)
+{
+	if (read_cnt)
+		*vptrptr = read_ptr;
+	return(read_cnt);
+}
+/* end readline */
+
+ssize_t
+Readline(int fd, void *ptr, size_t maxlen)
+{
+	ssize_t		n;
+
+	if ( (n = readline(fd, ptr, maxlen)) < 0)
+		err_sys("readline error");
+	return(n);
+}
+
+void err_sys(const char* x) 
+{ 
+    perror(x); 
+    exit(1); 
 }
