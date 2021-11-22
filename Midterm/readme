@@ -1,0 +1,126 @@
+Introduction to Network Programming: Midterm!
+How to Login to the Linux Testing Server
+Please use your preferred ssh client to connect to quiz.zoolab.org with username quiz. The login password will be announced right before the exam.
+
+The Login Password is: gnh4
+You can simply copy-paste it when you login into the testing server. If you login from Windows terminal or console, the command would be ssh quiz@quiz.zoolab.org
+
+Challenges: Solving Underground Mazes
+There are four challenges in the exam. Try to solve all these challenges automatically with your TCP client implemented in C/C++. Before you implement your codes, you may want to play with the games manually. Have fun!
+
+Note that you can only connect to the challenge servers from the Linux testing server.
+
+Level 1: Knock the Door
+Play with the server using the command nc echocli 10100.
+
+Please note that the number of rounds given in this challenge is randomly generated.
+
+Level 2: Find the Entry Point to the Next Level
+Play with the server using the command nc maze1 10100.
+
+Please note that the start position and target position is randomly generated in the maze.
+
+Level 3: Escape from the Maze
+Play with the server using the command nc maze2 10100.
+
+Please note that the start position and target position is randomly generated in the maze.
+
+Level 4: Explore and then Escape from the Maze
+Play with the server using the command nc maze3 10100.
+
+Please note that the start position and target position is randomly generated in the maze.
+
+How do we test your program?
+Copy-paste your codes in your terminal: cat > test.c. If test.c already exists, add a exclamation symbol to overwrite it: cat >! test.c (because we use zsh).
+Compile your codes in your terminal: gcc -Wall test.c, and it will produce a.out
+Use your program to interact with the corresponding challenge. It will be always in the format ./a.out <challenge_name> <port_number>. For example, ./a.out echocli 10100 to solve challange #1.
+If your implementation cannot handle domain name lookup, you will have 10% penalty.
+Alternatively, we may run your program in gdb: gdb a.out, and then use the command run <challenge_name> <port_number>.
+When solving a maze, please also print out all the steps you used to solve the maze at the end of your program. For example, given a sample maze below, suppose we plan to walk from '*' to 'E'
+#####
+#E..#
+#..*#
+##### 
+your program should output "AAW" before terminating your program. Note that characters W, S, A, and D represent moving towards up, down, left, and right, respectively.
+Your program must successfully solve the challenge and output everything you received from the challenge server. Once your program has successfully solve a challenge, the server will respond a "BINGO!" message as well as a verification token to you.
+The TA will check your verification token and grade it for you.
+Please note that your program should not crash in any test cases, even if we do not pass any argument to your program.
+Sample Hello, World program for testing your environment
+#include <stdio.h>
+
+int main(int argc, char *argv[]) {
+	printf("hello, world!\n");
+	return 0;
+}
+
+/*
+ copy-paste to test.c, compile and run it with
+ gcc test.c
+ ./a.out
+ */
+*** Important
+- Your implementation must create a TCP socket and interact with the server.
+你的程式實作必需要建立 TCP socket 並與我們的題目主機互動。
+
+- Your implementation cannot use any external program.
+你的程式不得使用任何外部程式。
+
+- You cannot use any other devices except the classroom desktop in the exam.
+除了電腦教室的桌機外，考試期間不得使用任何其他裝置。
+
+- Please print out all the received messages from the server to standard output during the execution of your implemented program.
+在你實作的程式執行過程中，請透過標準輸出印出所有從伺服器收到的訊息。
+
+- Please backup codes in your local machine, the Linux server for testing codes does not have a persistent storage. All the data will be removed when you logout.
+請將你的程式碼儲存在桌機內。測試程式碼的 Linux 伺服器並沒有永久儲存空間。登出後資料將被清空。
+
+- Please raise your hand and demo your program to TAs right after you have completed any one of the challenges. We will record your score for each successful demo. By successful it means that your codes can solve a corresponding challenge for at least three times without any human intervention in each run.
+每完成一個題目請立即舉手向助教展示。我們將在你成功展示完後記錄該題的分數。展示成功的定義是你的程式碼可以成功解開選定的題目至少三次，且每次執行過程中無任何人工介入的操作。
+
+External References
+https://man7.org/linux/man-pages/
+https://en.cppreference.com/w/
+Slides
+intro transport socket tcpsocket tcp-example multiplex sockopt udp addrconv daemon advio
+Course Sample Codes
+Login into the Linux quiz server and the text-book sample codes are available at $HOME/share/unpv13e. Alternatively, you can download the zip file from here. We have also prepared a precompiled text-book library $HOME/share/unpv13e/libunp.a. The required header files can be found in $HOME/share/unpv13e/lib/*.h.
+
+To work with text-book libraries, you may need the following arguments to gcc. For example:
+gcc -Wall -I/home/player/share/unpv13e/lib <your-source-codes.c> -L/home/player/share/unpv13e -lunp
+Pseudocodes for Solving a Maze using DFS
+Function DFS(P, E)
+	P: current position
+	E: exit point
+{
+	if P is equivalent to E: we are done!
+
+	mark P visited;
+
+	for each direction d in { up, down, left, right }:
+		P' is the next valid position of moving P on direction d
+		Skip the loop if P' is invalid
+		Call DFS(P', E)
+
+	mark P unvisited;
+}
+Pseudocodes for Solving a Maze using BFS
+Function BFS(S, E)
+	S: start point
+	E: exit point
+{
+	Q: a queue of points to be explored, initially empty
+	enqueue S into Q
+	mark S visited with an initial cost value of 1
+
+	while queue is not empty:
+		P = dequeue the first point from Q
+		for each direction d in { up, down, left, right }:
+			P' is the next valid position of moving P on direction d
+			Skip the loop if P' is invalid
+			if P' has not been visited:
+				enqueue P' into Q
+				mark P' visited with a cost value of cost(P)+1
+			if P' is equivalent to E: we are done!
+
+	backtrack from E to S based on the cost of each marked point in a strictly decreasing order
+}
