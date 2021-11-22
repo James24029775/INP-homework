@@ -79,7 +79,7 @@ str_cli(FILE *fp, int sockfd)
 	while (1) {
         if (Readline(sockfd, recvline, MAXLINE) == 0)
         {
-            cout << ("str_cli: server terminated prematurely\n");
+            // cout << ("str_cli: server terminated prematurely\n");
             return;
         }
 			

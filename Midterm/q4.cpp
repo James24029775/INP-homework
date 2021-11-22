@@ -26,12 +26,11 @@
 #include	<sys/un.h>		/* for Unix domain sockets */
 #include <bits/stdc++.h>
 #define	SA	struct sockaddr
-#define MAXLINE 1000
-#define INF 999
+#define MAXLINE 10000
+#define INF -1
 using namespace std;
 
-#define L 1000
-#define M 102
+#define M 101
 #define VH 7
 #define VW 11
 
@@ -159,7 +158,7 @@ str_cli(FILE *fp, int sockfd)
         bzero(&recvline, sizeof(recvline));
         if (Readline(sockfd, recvline, MAXLINE) == 0)
         {
-            cout << ("str_cli: server terminated prematurely\n");
+            // cout << ("str_cli: server terminated prematurely\n");
             return;
         }
 
@@ -199,6 +198,8 @@ str_cli(FILE *fp, int sockfd)
             if (ytime == 0 && xtime == 1) 
             {
                 // for (auto i : map) cout << i << endl;
+                map[100] = "#####################################################################################################";
+                
                 dflg = true;
             }
             xtime--;
@@ -249,9 +250,6 @@ str_cli(FILE *fp, int sockfd)
             Writen(sockfd, sendline, strlen(sendline));
         }
 
-
-        
-
         if (recvline[0] == 'E' && dflg)
         {
             if (bfirst)
@@ -275,24 +273,29 @@ str_cli(FILE *fp, int sockfd)
             Writen(sockfd, sendline, strlen(sendline));
             
         }
-        // cout << sendline;
 	}
 }
 
 
 void print_pth(VPI &parent)
 {
-    PI cur = parent[Epos.first][Epos.second];
+    PI cur = PI(Epos.first, Epos.second);
     
+    int s = 0;
     stack<PI> stk;
-    stk.push(PI(Epos.first, Epos.second));
     while (1)
     {
         stk.push(cur);
         if (cur.first == Spos.first && cur.second == Spos.second) break;
-        cur = parent[cur.first][cur.second];
-    }
+        // cout << "CUR: " << cur.first << ' ' <<  cur.second << endl;
+        // cout << "START: " << Spos.first << ' ' << Spos.second << endl;
 
+        cur = parent[cur.first][cur.second];
+        // cout << s++ << endl;
+        // stk.push(cur);
+        // if (cur.first == Spos.first && cur.second == Spos.second) break;
+        // cur = parent[cur.first][cur.second];
+    }
 
     PI next;
     cur = stk.top();
@@ -308,7 +311,6 @@ void print_pth(VPI &parent)
         else if(next.first-cur.first==-1&&next.second-cur.second== 0) headfor.push_back("W\n");
         cur = next;
     }
-    
 }
 
 
@@ -324,7 +326,7 @@ void BFS(vector<string> &map, VPI &parent, VI &dist)
     queue<PI> q;
     q.push(Spos);
     dist[Spos.first][Spos.second] = 0;
-    parent[Spos.first][Spos.second] = PI(Spos.first, Spos.second);
+    parent[Spos.first][Spos.second] = Spos;
 
     while(!q.empty()){
         
@@ -337,6 +339,7 @@ void BFS(vector<string> &map, VPI &parent, VI &dist)
                 // cout << "end" << endl;
                 parent[nextX][nextY] = cur;
                 dist[nextX][nextY] = dist[cur.first][cur.second] + 1;
+                // for (auto i : map) cout << i << endl;
                 return;
             }
             
