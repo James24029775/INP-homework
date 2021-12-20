@@ -24,6 +24,10 @@ using namespace std;
 # define KK 8000
 typedef struct sockaddr SA;
 
+string base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                        "abcdefghijklmnopqrstuvwxyz"
+                        "0123456789+/";
+
 /*From textbook*/
 ssize_t writen(int fd, const void *vptr, size_t n);
 void    Writen(int fd, void *ptr, size_t nbytes);
@@ -33,8 +37,8 @@ void    err_sys(const char* x);
 ssize_t Readline(int fd, void *ptr, size_t maxlen);
 void    Initialization();
 void    sendMessage(string msg, int sockfd);
-void    DecideService(char *readBuf, int n, string *username, string *pwd, string *msg, string *bname, string *comment, int *type, int *cnt, int *qpost, string *title, string *content, int *port, int *version, string *chatMsg);
-void    DoService(int type, int cnt, string username, string pwd, string msg, string bname, string title, string content, string comment, int qpost, int port, int version, int sockfd_udp, string chatMsg, int clientIdx, string *tmp);
+void    DecideService(char *readBuf, int n, string *username, string *pwd, string *msg, string *bname, string *comment, int *type, int *cnt, int *qpost, string *title, string *content, string *port, string *version, string *chatMsg);
+void    DoService(int sockfd, int &type, int cnt, string username, string pwd, string msg, string bname, string title, string content, string comment, int qpost, string port, string version, int sockfd_udp, string chatMsg, int clientIdx, string *tmp);
 void    popMsg(int idx, int msgindex, string *tmp);
 void    storeUsername(string username, string pwd);
 void    storeBoardInfo(string bname, string username);
@@ -50,27 +54,34 @@ void    showPrompt(int sockfd);
 void    bindPort(int port, int version);
 bool    MessageBox(int sockfd, int clientIdx, int sockfd_udp);
 bool    isMsgLeft(int index);
-void    storePort(int port, int version);
-void    updateHistory(int clientIndex, string chatMsg, string *tmp);
-void    oneForAll(int sockfd_udp, string chatMsg);
+void    storePort(int sockfd, int port, int version, int clientIdx);
+void    updateHistory(string fullMsg, int clientIdx);
+void    oneForAll(int sockfd_udp, string name, string chatMsg, int clientIdx);
+void    chatRoom(int sockfd_udp);
+void    upack_v1(char* pkt, string &name, string &chatMsg);
+void    upack_v2(char* pkt, string &name, string &chatMsg);
 
 string  filterMsg(int userIndex, string chatMsg);
 string  accessTime();
 string  tranBR(string content);
+string  mergeName(int clientIdx, string chatMsg);
+string  to_base64(string const &data);
+string  from_base64(string const &data);
 
 bool    checkForm(int type, int cnt, string bname, string title, string content, string comment, int qpost);
 int     checkUserIfExist(string username);
 int     checkBnameIfExist(string bname);
+int     findClientIdx(struct sockaddr_in target);
 
 typedef class userInfo
 {
     public:
         string name;
         string pwd;
-        bool   loginOrNot, inChatroomOrNot;
+        bool   loginOrNot, inChatroomOrNot, ban;
         int    black;
         vector<string> msgbox[K];
-        userInfo() {loginOrNot = false; inChatroomOrNot = false; black = 0;}
+        userInfo() {loginOrNot = false; inChatroomOrNot = false; ban = false; black = 0;}
 } userInfo;
 
 typedef class commentInfo
@@ -112,6 +123,8 @@ typedef class talkerInfo
     public:
         int port;
         int version;
+        struct sockaddr_in cliaddr;
+        talkerInfo(){}
         talkerInfo(int a, int b):port(a), version(b){}
 } talkerInfo;
 
@@ -137,13 +150,13 @@ vector<postInfo> VpostInfo;
 vector<bool>    VpostExist;
 
 /*HW3 variables*/
-vector<talkerInfo> VtalkerInfo;
+talkerInfo VtalkerInfo[MaxConnection];
 string  history = "";
 vector<string>  filteringList = {"how", "you", "or", "pek0", "tea", "ha", "kon", "pain", "Starburst Stream"};
-uint16_t tmppp;
+
+
 int main(int argc, char *argv[])
 {
-
     if (argc != 2){
         err_sys("server usage: ./hw3 [port number]");
     }
@@ -163,13 +176,15 @@ int main(int argc, char *argv[])
     /* Initiate a socket service.*/
     listenfd_tcp = socket(AF_INET, SOCK_STREAM, 0);
     sockfd_udp = socket(AF_INET, SOCK_DGRAM, 0);
+
+    int flag = 1, len = sizeof(int);
+    setsockopt(listenfd_tcp, SOL_SOCKET, SO_REUSEADDR, &flag, len);
     
     /* Fill server's basic info.*/
     bzero(&servaddr, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     servaddr.sin_port = htons(atoi(argv[1]));
-    tmppp = atoi(argv[1]);
 
     /* Bind basic info with the socket service.*/
     bind(listenfd_tcp, (SA *) &servaddr, sizeof(servaddr));
@@ -193,6 +208,11 @@ int main(int argc, char *argv[])
     for( ; ; ){
         rset = allset;
         nready = select(maxfd+1, &rset, NULL, NULL, NULL);
+
+        if (FD_ISSET(sockfd_udp, &rset)) 
+        {
+            chatRoom(sockfd_udp);
+        }
 
         if (FD_ISSET(listenfd_tcp, &rset))
         {
@@ -227,9 +247,26 @@ int main(int argc, char *argv[])
             if ((sockfd = client[i]) == -1) continue;
             sockfd = client[i];
             
-            if (FD_ISSET(sockfd, &rset)) {
-                CUseOrNot[i] = MessageBox(sockfd, i, sockfd_udp);   /*Tackle Msgbox function*/
+            if (VuserInfo.size() != 0)
+            {
+                if (VuserInfo[userIndex[i]].ban)
+                {
+                    char tmp[1000];
+                    string ttmp = tmp;
+                    bzero(&tmp, 1000);
+                    sprintf(tmp, "Bye, %s.\n", VuserInfo[userIndex[i]].name.c_str());
+                    ttmp = tmp;
+                    sendMessage(ttmp, sockfd);
+                    showPrompt(sockfd);
+                    VuserInfo[userIndex[i]].loginOrNot = false;
+                    userIndex[i] = -1;
+                    
+                }
+            }
 
+            if (FD_ISSET(sockfd, &rset)) 
+            {
+                CUseOrNot[i] = MessageBox(sockfd, i, sockfd_udp);   /*Tackle Msgbox function*/
                 if (CUseOrNot[i])                      /*Mean connection failed or client type "exit"*/
                 {
                     userIndex[i]       = -1;
@@ -239,29 +276,174 @@ int main(int argc, char *argv[])
                 }
                 else showPrompt(sockfd);                /*Deal with "%"*/
 
-				if (--nready <= 0)
-					break;				/* no more readable descriptors */
-			}
+                if (--nready <= 0)
+                    break;              /* no more readable descriptors */
+
+            }
         }
 
-        if (FD_ISSET(sockfd_udp, &rset)) {
-            cout << "hIHI " << endl;
-            // CUseOrNot[i] = MessageBox(sockfd, i, sockfd_udp);   /*Tackle Msgbox function*/
+        
 
-            // if (CUseOrNot[i])                      /*Mean connection failed or client type "exit"*/
-            // {
-            //     userIndex[i]       = -1;
-            //     close(sockfd);
-            //     FD_CLR(sockfd, &allset);
-            //     client[i] = -1;
-            // }
-            // else showPrompt(sockfd);                /*Deal with "%"*/
-
-            // if (--nready <= 0)
-            //     break;				/* no more readable descriptors */
-        }
+        for (int i = 0 ; i <maxi ; i++)
+            cout << "H: " << VuserInfo[userIndex[i]].black << ' ' << VuserInfo[userIndex[i]].loginOrNot << endl;
+        
     }
     return 0;
+}
+
+string to_base64(string const &data) 
+{
+    int counter = 0;
+    uint32_t bit_stream = 0;
+    string encoded = "";
+    int offset = 0;
+    for (unsigned char c : data) {
+        auto num_val = static_cast<unsigned int>(c);
+        offset = 16 - counter % 3 * 8;
+        bit_stream += num_val << offset;
+        if (offset == 16) {
+        encoded += base64_chars.at(bit_stream >> 18 & 0x3f);
+        }
+        if (offset == 8) {
+        encoded += base64_chars.at(bit_stream >> 12 & 0x3f);
+        }
+        if (offset == 0 && counter != 3) {
+        encoded += base64_chars.at(bit_stream >> 6 & 0x3f);
+        encoded += base64_chars.at(bit_stream & 0x3f);
+        bit_stream = 0;
+        }
+        counter++;
+    }
+    if (offset == 16) {
+        encoded += base64_chars.at(bit_stream >> 12 & 0x3f);
+        encoded += "==";
+    }
+    if (offset == 8) {
+        encoded += base64_chars.at(bit_stream >> 6 & 0x3f);
+        encoded += '=';
+    }
+    return encoded;
+}
+
+string from_base64(string const &data) 
+{
+    int counter = 0;
+    uint32_t bit_stream = 0;
+    string decoded = "";
+    int offset = 0;
+    for (unsigned char c : data) {
+        auto num_val = base64_chars.find(c);
+        if (num_val != string::npos) {
+            offset = 18 - counter % 4 * 6;
+            bit_stream += num_val << offset;
+            if (offset == 12) {
+                decoded += static_cast<char>(bit_stream >> 16 & 0xff);
+            }
+            if (offset == 6) {
+                decoded += static_cast<char>(bit_stream >> 8 & 0xff);
+            }
+            if (offset == 0 && counter != 4) {
+                decoded += static_cast<char>(bit_stream & 0xff);
+                bit_stream = 0;
+            }
+        } 
+        else if (c != '=') {
+            return string();
+        }
+        counter++;
+    }
+    return decoded;
+}
+
+void upack_v1(unsigned char* pkt, string &name, string &chatMsg)
+{
+    uint16_t name_len, msg_len;
+    int i;
+    name = "";
+    chatMsg = "";
+
+    name_len = ((uint16_t)pkt[2] << 8 | pkt[3]);
+    for (i = 4 ; i < 4+name_len ; i++)
+    {
+        name += pkt[i];
+    }
+    msg_len = ((uint16_t)pkt[i] << 8 | pkt[i+1]);
+    i += 2;
+    chatMsg = "";
+    for (; i < 6+name_len+msg_len ; i ++)
+    {
+        chatMsg += pkt[i];
+    }
+}
+
+void upack_v2(unsigned char* pkt, string &name, string &chatMsg)
+{
+    int i;
+    string name_t = "", chatMsg_t = "";
+    bool flg = true;
+
+    for (i = 2 ; i < strlen((char*)pkt) ; i++)
+    {
+        if (flg)
+        {
+            if (pkt[i] == '\n')
+                flg = false;
+            else
+                name_t += pkt[i];
+        }
+        else
+        {
+            if (pkt[i] == '\n')
+                break;
+            chatMsg_t += pkt[i];
+        }
+    }  
+    name = from_base64(name_t);
+    chatMsg = from_base64(chatMsg_t);
+}
+
+string mergeName(int clientIdx, string chatMsg)
+{
+    string ans = VuserInfo[userIndex[clientIdx]].name + (string)":" + chatMsg;
+    return ans;
+}
+
+int findClientIdx(struct sockaddr_in target)
+{
+    for (int i = 0 ; i < MaxConnection ; i++)
+    {
+        // if (htons(VtalkerInfo[i].cliaddr.sin_port) == target)
+        if (target.sin_port == VtalkerInfo[i].cliaddr.sin_port)
+            return i;
+    }
+    return -1;
+}
+
+void chatRoom(int sockfd_udp)
+{
+    int n, clientIdx, version;
+    unsigned char pkt[MAXLINE], msg_t[MAXLINE];
+    struct sockaddr_in cliaddr;
+    socklen_t len = sizeof(cliaddr);
+    string fullMsg;
+    
+    if (!VuserInfo[userIndex[clientIdx]].ban)
+    {
+        n = recvfrom(sockfd_udp, pkt, MAXLINE, 0, (SA*) &cliaddr, &len);
+        clientIdx = findClientIdx(cliaddr);
+        version = VtalkerInfo[clientIdx].version;
+    
+        string name, chatMsg;
+        if (version == 1)
+            upack_v1(pkt, name, chatMsg);
+        else if (version == 2)
+            upack_v2(pkt, name, chatMsg);
+
+        chatMsg = filterMsg(userIndex[clientIdx], chatMsg);
+        fullMsg = mergeName(clientIdx, chatMsg);
+        updateHistory(fullMsg, clientIdx);
+        oneForAll(sockfd_udp, name, chatMsg, clientIdx);
+    }
 }
 
 
@@ -269,8 +451,8 @@ bool MessageBox(int sockfd, int clientIdx, int sockfd_udp)
 {
     char readBuf[MAXLINE];
     ssize_t n;
-    string username, pwd, msg, bname, comment, title, content, tmp, chatMsg;
-    int type=-1, cnt=0, qpost=-1, port, version;
+    string username, pwd, msg, bname, comment, title, content, tmp, chatMsg, port, version;
+    int type=-1, cnt=0, qpost=-1;
     bool isTrueForm=true;
 
 again:
@@ -287,39 +469,9 @@ again:
     title = "";
     content = "";
     tmp = "";
-    port = version = 0;
+    port = version = "";
     
     bzero(&readBuf, MAXLINE);
-
-
-    struct sockaddr_in cliaddr;
-    socklen_t len;
-    char mesg[MAXLINE];
-    cout << sockfd << endl;
-    cout << sockfd_udp << endl;
-    n = recvfrom(sockfd, mesg, MAXLINE, 0, (SA *) &cliaddr, &len);
-    cout << mesg << endl;
-    n = recvfrom(sockfd_udp, mesg, MAXLINE, 0, (SA *) &cliaddr, &len);
-    cout << mesg << endl;
-
-    // struct sockaddr_in servaddr, cliaddr; 
-    // // sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    // bzero(&servaddr, sizeof(servaddr)); 
-    // servaddr.sin_family = AF_INET;
-    // servaddr.sin_addr.s_addr = htonl(INADDR_ANY); 
-    // servaddr.sin_port = htons(tmppp);
-    // bind(sockfd, (SA *) &servaddr, sizeof(servaddr));
-    // cout << sockfd << endl;
-    // socklen_t len; 
-    // char mesg[MAXLINE];
-    // for ( ; ; ) 
-    // { 
-    //     len = sizeof(cliaddr); 
-    //     n = recvfrom(sockfd, mesg, MAXLINE, 0, (SA*) &cliaddr, &len);
-    //     sendto(sockfd, mesg, n, 0, (SA*) &cliaddr, len); 
-    // }
-
-
 
     /*Check for disconnection*/
     if ((n = Readline(sockfd, readBuf, MAXLINE)) < 0) return -1;                                
@@ -330,12 +482,7 @@ again:
         DecideService(readBuf, n, &username, &pwd, &msg, &bname, &comment, &type, &cnt, &qpost, &title, &content, &port, &version, &chatMsg);
 
         /*Update userIndex[] base on clientIdx, tmp*/
-        DoService(type, cnt, username, pwd, msg, bname, title, content, comment, qpost-1, port, version, sockfd_udp, chatMsg, clientIdx, &tmp);
-
-        for ( int z = 0 ; z < MaxConnection ; z++){
-            cout << userIndex[z] << ' ';
-        }
-        cout << endl;
+        DoService(sockfd, type, cnt, username, pwd, msg, bname, title, content, comment, qpost-1, port, version, sockfd_udp, chatMsg, clientIdx, &tmp);
         
         sendMessage(tmp, sockfd);
 
@@ -400,7 +547,7 @@ void Initialization()
     memset(CUseOrNot, false, MaxConnection);
 }
 
-int cmpfunc (const void * a, const void * b)
+int cmpfunc(const void * a, const void * b)
 {
     string nameA = (*(msgIndex*)a).name;
     string nameB = (*(msgIndex*)b).name;
@@ -553,7 +700,7 @@ int checkUserIfExist(string username)
         so need to pass the address of pointer variables to the function, so does msg.
 */
 void DecideService(char *readBuf, int n, string *username, string *pwd, string *msg, string *bname, string *comment,
-                int *type, int *cnt, int *qpost, string *title, string *content, int *port, int *version, string *chatMsg)
+                int *type, int *cnt, int *qpost, string *title, string *content, string *port, string *version, string *chatMsg)
 {
     char *order;
     string msg_t = readBuf;
@@ -583,7 +730,7 @@ void DecideService(char *readBuf, int n, string *username, string *pwd, string *
         else if (strcmp(order, "comment")        == 0)    *type = 16;
         /*HW3 operation*/
         else if (strcmp(order, "enter-chat-room")== 0)    *type = 17;
-        else if (strcmp(order, "chat")           == 0)    *type = 18;
+        // else if (strcmp(order, "chat")           == 0)    *type = 18;
 
 
         if (*type == 0 && *cnt == 1) *username = order;
@@ -634,7 +781,7 @@ void DecideService(char *readBuf, int n, string *username, string *pwd, string *
                     string key = str.substr(0, sp);
                     str_cpy = str;
                     str_cpy.erase(0, sp + delimiter.length());
-                    str_cpy.erase(std::remove(str_cpy.begin(), str_cpy.end(), '\n'), str_cpy.end());
+                    str_cpy.erase(remove(str_cpy.begin(), str_cpy.end(), '\n'), str_cpy.end());
                     if (key.compare("title") == 0)          *title = str_cpy;
                     else if (key.compare("content") == 0)   *content = str_cpy;
                 }
@@ -668,7 +815,7 @@ void DecideService(char *readBuf, int n, string *username, string *pwd, string *
                     string key = str.substr(0, sp);
                     string str_cpy = str;
                     str_cpy.erase(0, sp + delimiter.length());
-                    str_cpy.erase(std::remove(str_cpy.begin(), str_cpy.end(), '\n'), str_cpy.end());
+                    str_cpy.erase(remove(str_cpy.begin(), str_cpy.end(), '\n'), str_cpy.end());
                     if (key.compare("title") == 0)          *title = str_cpy;
                     else if (key.compare("content") == 0)   *content = str_cpy;
                 }
@@ -689,25 +836,36 @@ void DecideService(char *readBuf, int n, string *username, string *pwd, string *
             *comment = msg_t;
         }
 
-        if (*type == 17 && *cnt == 1) *port    = atoi(order);
-        else if (*type == 17 && *cnt == 2) *version = atoi(order);
+        if (*type == 17 && *cnt == 1) *port    = order;
+        else if (*type == 17 && *cnt == 2) *version = order;
 
-        if (*type == 18 && *cnt == 1)
-        {
-            string delimiter = " ";
-            size_t pos = msg_t.find(delimiter);
-            msg_t.erase(0, pos + delimiter.length());
-            *chatMsg = msg_t;
-            break;
-        }
+        // if (*type == 18 && *cnt == 1)
+        // {
+        //     string delimiter = " ";
+        //     size_t pos = msg_t.find(delimiter);
+        //     msg_t.erase(0, pos + delimiter.length());
+        //     *chatMsg = msg_t;
+        //     break;
+        // }
 
         order = strtok(NULL, " ");
         *cnt += 1;
     }
 }
 
-void DoService(int type, int cnt, string username, string pwd, string msg, string bname, 
-    string title, string content, string comment, int qpost, int port, int version, int sockfd_udp, string chatMsg, int clientIdx, string *tmp)
+bool isdigit(string input)
+{
+    int tmp;
+    for (int i = 0 ; i < input.length() ; i++)
+    {
+        tmp = (int)input[i];
+        if (47 > tmp || tmp > 57) return false;
+    }
+    return true;
+}
+
+void DoService(int sockfd, int &type, int cnt, string username, string pwd, string msg, string bname, 
+    string title, string content, string comment, int qpost, string port, string version, int sockfd_udp, string chatMsg, int clientIdx, string *tmp)
 {
     int RegForClient;
     int MsgForClient;
@@ -717,6 +875,7 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
     int LPForClient;
     char ttmp[500];
     int tmpForPort;
+    bool valid_exit = false;
 
     int isTrueForm = checkForm(type, cnt, bname, title, content, comment, qpost);
     if (isTrueForm)
@@ -757,7 +916,7 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
                         *tmp = "Login failed.\n";
                         userIndex[clientIdx] = -1;
                     }
-                    else if (VuserInfo[userIndex[clientIdx]].black == 3){
+                    else if (VuserInfo[userIndex[clientIdx]].ban){
                         sprintf(ttmp, "We don't welcome %s!\n", VuserInfo[userIndex[clientIdx]].name.c_str());
                         *tmp = ttmp;
                         userIndex[clientIdx] = -1;
@@ -803,10 +962,9 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
                 break;
 
             // Tackle Exit
-            /*離開聊天室要刪除Vtalker*****************************************************************************************/
             case 5:
                 if (VuserInfo.size() == 0) {
-                    *tmp = "Bye.\n";
+                    *tmp = "";
                 }
                 else if (VuserInfo[userIndex[clientIdx]].loginOrNot){
                     VuserInfo[userIndex[clientIdx]].loginOrNot = false;
@@ -995,44 +1153,33 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
                 else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
                     *tmp = "Please login first.\n";
                 }
-                else if (port < 1 || port > 65535) {
-                    sprintf(ttmp, "Port %d is not valid.\n", port);
+                else if (!isdigit(port)) {
+                    sprintf(ttmp, "Port %s is not valid.\n", port.c_str());
                     *tmp = ttmp;
                 }
-                // 可能有問題，version is not a number*******************************************************
-                else if (version != 1 && version != 2) {
-                    sprintf(ttmp, "Version %d is not supported.\n", version);
+                else if (!isdigit(version)) {
+                    sprintf(ttmp, "Version %s is not supported.\n", version.c_str());
+                    *tmp = ttmp;
+                }
+                else if (atoi(port.c_str()) < 1 || atoi(port.c_str()) > 65535) {
+                    sprintf(ttmp, "Port %s is not valid.\n", port.c_str());
+                    *tmp = ttmp;
+                }
+                else if (atoi(version.c_str()) != 1 && atoi(version.c_str()) != 2) {
+                    sprintf(ttmp, "Version %s is not supported.\n", version.c_str());
                     *tmp = ttmp;
                 }
                 else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
                     *tmp = "Please login first.\n";
                 }
                 else {
-                    sprintf(ttmp, "Welcome to public chat room.\nPort:%d\nVersion:%d\n%s", port, version, history.c_str());
+                    sprintf(ttmp, "Welcome to public chat room.\nPort:%s\nVersion:%s\n%s", port.c_str(), version.c_str(), history.c_str());
                     *tmp = ttmp;
-                    storePort(port, version);
+                    storePort(sockfd, atoi(port.c_str()), atoi(version.c_str()), clientIdx);
                     VuserInfo[userIndex[clientIdx]].inChatroomOrNot = true;
                 }
                 break;
             
-            // Tackle chat
-            case 18:
-                if (VuserInfo.size() == 0) {
-                    *tmp = "Please login first.\n";
-                }
-                else if (VuserInfo[userIndex[clientIdx]].loginOrNot == false){
-                    *tmp = "Please login first.\n";
-                }
-                else if (VuserInfo[userIndex[clientIdx]].inChatroomOrNot == false){
-                    *tmp = "Please enter chat room first.\n";
-                }
-                else{
-                    chatMsg = filterMsg(userIndex[clientIdx], chatMsg);
-                    updateHistory(clientIdx, chatMsg, tmp);
-                    oneForAll(sockfd_udp, chatMsg);
-                }
-                break;
-
             // Default
             default:
                 *tmp = "Invalid service!\n";
@@ -1047,6 +1194,12 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
                 break;
             case 1: 
                 *tmp = "Usage: login <username> <password>\n";
+                break;
+            case 2:
+                *tmp = "Usage: logout\n";
+                break;
+            case 5:
+                *tmp = "Usage: exit\n";
                 break;
             case 6:
                 *tmp = "Usage: send <username> <message>\n";
@@ -1083,17 +1236,75 @@ void DoService(int type, int cnt, string username, string pwd, string msg, strin
                 break;
         }
     }
+    if (type == 5) type = (isTrueForm == 1) ? 5 : -1;
 }
 
-void oneForAll(int sockfd_udp, string chatMsg)
+struct a 
 {
-    int sockfd;
-    struct sockaddr_in servaddr, cliaddr; 
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    bzero(&servaddr, sizeof(servaddr)); 
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = htonl(INADDR_ANY); 
-    servaddr.sin_port = htons(SERV_PORT);
+    unsigned char flag;
+    unsigned char version;
+    unsigned char payload[0];
+} __attribute__((packed));
+
+struct b 
+{
+    unsigned short len;
+    /* The function of data[0] is to be a pointer when filling data. */
+    unsigned char data[0];
+} __attribute__((packed));
+
+void packetVer1(string &name, string &chatMsg, unsigned char *buf)
+{
+    uint16_t name_len    = (uint16_t)name.length();
+    uint16_t chatMsg_len = (uint16_t)chatMsg.length();
+
+    struct a *pa  = (struct a*) buf;
+    struct b *pb1 = (struct b*) (buf + sizeof(struct a));
+    struct b *pb2 = (struct b*) (buf + sizeof(struct a) + sizeof(struct b) + name_len);
+    pa->flag = 0x01;
+    pa->version = 0x01;
+    pb1->len = htons(name_len);
+    memcpy(pb1->data, name.c_str(), name_len);
+    pb2->len = htons(chatMsg_len);
+    memcpy(pb2->data, chatMsg.c_str(), chatMsg_len);
+}
+
+void packetVer2(string name, string chatMsg, char *buf)
+{
+    name = to_base64(name);
+    chatMsg = to_base64(chatMsg);
+
+    sprintf(buf, "\x01\x02%s\n%s\n", name.c_str(), chatMsg.c_str());
+}
+
+void oneForAll(int sockfd_udp, string name, string chatMsg, int clientIdx)
+{
+    int port, version;
+    struct sockaddr_in cliaddr;
+    socklen_t len = sizeof(cliaddr);
+    unsigned char buf_1[4096];
+    char buf_2[4096], buf[10];
+
+    if (!VuserInfo[userIndex[clientIdx]].ban)
+    {
+        for (int i = 0 ; i < MaxConnection ; i++)
+        {
+            version = VtalkerInfo[i].version;
+            cliaddr = VtalkerInfo[i].cliaddr;
+            if      (version == 1) {
+                packetVer1(name, chatMsg, buf_1);
+                sendto(sockfd_udp, buf_1, 6+name.length()+chatMsg.length(), 0, (SA*) &cliaddr, len);
+            }
+            else if (version == 2) {
+                packetVer2(name, chatMsg, buf_2);
+                sendto(sockfd_udp, buf_2, strlen(buf_2), 0, (SA*) &cliaddr, len);
+            }
+        }
+    }
+
+    for (int i = 0 ; i < MaxConnection ; i++)
+        cout << VuserInfo[userIndex[i]].black << ' ';
+    cout << endl;
 }
 
 string filterMsg(int userIndex, string chatMsg)
@@ -1122,39 +1333,28 @@ string filterMsg(int userIndex, string chatMsg)
     return ans;
 }
 
-void updateHistory(int clientIdx, string chatMsg, string *tmp)
+void updateHistory(string fullMsg, int clientIdx)
 {
-    *tmp = VuserInfo[userIndex[clientIdx]].name + (string)":" + chatMsg;
-    history = history + (*tmp);
-
-    if (VuserInfo[userIndex[clientIdx]].black == 3)
+    history = history + fullMsg + '\n';
+    if (VuserInfo[userIndex[clientIdx]].black > 2)
     {
-        VuserInfo[userIndex[clientIdx]].loginOrNot = false;
-        *tmp = "Bye, ";
-        *tmp += VuserInfo[userIndex[clientIdx]].name + ".\n";
-        userIndex[clientIdx] = -1;
+        VuserInfo[userIndex[clientIdx]].ban = true;
+        VtalkerInfo[clientIdx].cliaddr.sin_port = htons(-1);
     }
 }
 
-int checkPortIfExist(int port)
+void storePort(int sockfd, int port, int version, int clientIdx)
 {
-    int i = 0;
-    for(; i < VtalkerInfo.size(); i++)
-    {
-        if (VtalkerInfo[i].port == port) return i;
-    }
-    return -1;
-}
+    struct sockaddr_in cliaddr;
+    socklen_t len = sizeof(cliaddr);
 
-void storePort(int port, int version)
-{
     int tmpForPort;
     talkerInfo tmp(port, version);
-    if ((tmpForPort = checkPortIfExist(port)) == -1)
-        VtalkerInfo.push_back(tmp);
-
-    else
-        VtalkerInfo[tmpForPort] = tmp;
+    cliaddr.sin_family = AF_INET;
+    cliaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    cliaddr.sin_port = htons(port);
+    tmp.cliaddr = cliaddr;
+    VtalkerInfo[clientIdx] = tmp;
 }
 
 string accessTime()
@@ -1182,6 +1382,8 @@ bool checkForm(int type, int cnt, string bname, string title, string content, st
 {
     if (type == 0 && cnt != 3) return false;
     if (type == 1 && cnt != 3) return false;
+    if (type == 2 && cnt > 1)  return false;
+    if (type == 5 && cnt > 1)  return false;
     if (type == 6 && cnt <= 2) return false;
     if (type == 8 && cnt != 2) return false;
     if (type == 9 && cnt != 2) return false;
@@ -1196,7 +1398,6 @@ bool checkForm(int type, int cnt, string bname, string title, string content, st
     return true;
 }
 
-
 int checkBnameIfExist(string bname)
 {
     int i = 0;
@@ -1209,99 +1410,99 @@ int checkBnameIfExist(string bname)
 
 /* include writen */
 /* Write "n" bytes to a descriptor. */
-ssize_t	writen(int fd, const void *vptr, size_t n)
+ssize_t writen(int fd, const void *vptr, size_t n)
 {
-	size_t		nleft;
-	ssize_t		nwritten;
-	const char	*ptr;
+    size_t      nleft;
+    ssize_t     nwritten;
+    const char  *ptr;
 
-	ptr = (const char*)vptr;
-	nleft = n;
-	while (nleft > 0) {
-		if ( (nwritten = write(fd, ptr, nleft)) <= 0) {
-			if (nwritten < 0 && errno == EINTR)
-				nwritten = 0;		/* and call write() again */
-			else
-				return(-1);			/* error */
-		}
+    ptr = (const char*)vptr;
+    nleft = n;
+    while (nleft > 0) {
+        if ( (nwritten = write(fd, ptr, nleft)) <= 0) {
+            if (nwritten < 0 && errno == EINTR)
+                nwritten = 0;       /* and call write() again */
+            else
+                return(-1);         /* error */
+        }
 
-		nleft -= nwritten;
-		ptr   += nwritten;
-	}
-	return(n);
+        nleft -= nwritten;
+        ptr   += nwritten;
+    }
+    return(n);
 }
 /* end writen */
 
 void Writen(int fd, void *ptr, size_t nbytes)
 {
-	if (writen(fd, ptr, nbytes) != nbytes)
-		err_sys("writen error");
+    if (writen(fd, ptr, nbytes) != nbytes)
+        err_sys("writen error");
 }
 
-static int	read_cnt;
-static char	*read_ptr;
-static char	read_buf[MAXLINE];
+static int  read_cnt;
+static char *read_ptr;
+static char read_buf[MAXLINE];
 
 static ssize_t
 my_read(int fd, char *ptr)
 {
 
-	if (read_cnt <= 0) {
+    if (read_cnt <= 0) {
 again:
-		if ( (read_cnt = read(fd, read_buf, sizeof(read_buf))) < 0) {
-			if (errno == EINTR)
-				goto again;
-			return(-1);
-		} else if (read_cnt == 0)
-			return(0);
-		read_ptr = read_buf;
-	}
+        if ( (read_cnt = read(fd, read_buf, sizeof(read_buf))) < 0) {
+            if (errno == EINTR)
+                goto again;
+            return(-1);
+        } else if (read_cnt == 0)
+            return(0);
+        read_ptr = read_buf;
+    }
 
-	read_cnt--;
-	*ptr = *read_ptr++;
-	return(1);
+    read_cnt--;
+    *ptr = *read_ptr++;
+    return(1);
 }
 
 ssize_t
 readline(int fd, void *vptr, size_t maxlen)
 {
-	ssize_t	n, rc;
-	char	c, *ptr;
+    ssize_t n, rc;
+    char    c, *ptr;
 
-	ptr = (char*)vptr;
-	for (n = 1; n < maxlen; n++) {
-		if ( (rc = my_read(fd, &c)) == 1) {
-			*ptr++ = c;
-			if (c == '\n')
-				break;	/* newline is stored, like fgets() */
-		} else if (rc == 0) {
-			*ptr = 0;
-			return(n - 1);	/* EOF, n - 1 bytes were read */
-		} else
-			return(-1);		/* error, errno set by read() */
-	}
+    ptr = (char*)vptr;
+    for (n = 1; n < maxlen; n++) {
+        if ( (rc = my_read(fd, &c)) == 1) {
+            *ptr++ = c;
+            if (c == '\n')
+                break;  /* newline is stored, like fgets() */
+        } else if (rc == 0) {
+            *ptr = 0;
+            return(n - 1);  /* EOF, n - 1 bytes were read */
+        } else
+            return(-1);     /* error, errno set by read() */
+    }
 
-	*ptr = 0;	/* null terminate like fgets() */
-	return(n);
+    *ptr = 0;   /* null terminate like fgets() */
+    return(n);
 }
 
 ssize_t
 readlinebuf(void **vptrptr)
 {
-	if (read_cnt)
-		*vptrptr = read_ptr;
-	return(read_cnt);
+    if (read_cnt)
+        *vptrptr = read_ptr;
+    return(read_cnt);
 }
 /* end readline */
 
 ssize_t
 Readline(int fd, void *ptr, size_t maxlen)
 {
-	ssize_t		n;
+    ssize_t     n;
 
-	if ( (n = readline(fd, ptr, maxlen)) < 0)
-		err_sys("readline error");
-	return(n);
+    if ( (n = readline(fd, ptr, maxlen)) < 0)
+        err_sys("readline error");
+    return(n);
 }
 
 void err_sys(const char* x) 
